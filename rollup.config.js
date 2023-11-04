@@ -1,5 +1,6 @@
 import { base64 } from "./util/import-base-64.js";
 import terser from '@rollup/plugin-terser';
+import dts from 'rollup-plugin-dts';
 
 export default [
     {
@@ -51,10 +52,21 @@ export default [
             }
         ],
         plugins: [
-            base64({ 
+            base64({
                 include: "**/*.wasm",
                 sourceMap: false
             })
         ]
-    }
+    },
+    {
+        input: './src/index.js',
+        output: [{file: 'build/gaussian-splats-3d.d.ts', format: 'esm'}],
+        plugins: [
+            dts(),
+            base64({
+                include: "**/*.wasm",
+                sourceMap: false
+            })
+        ],
+    },
 ];
