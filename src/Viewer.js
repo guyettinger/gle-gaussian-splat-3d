@@ -115,13 +115,13 @@ export class Viewer {
 
         return function(mouse) {
             clickOffset.copy(this.mousePosition).sub(this.mouseDownPosition);
+            this.mousePosition.set(mouse.offsetX, mouse.offsetY);
             const mouseUpTime = getCurrentTime();
             const wasClick = mouseUpTime - this.mouseDownTime < 0.5 && clickOffset.length() < 2;
-            if (!this.transitioningCameraTarget && wasClick) {
+            if (this.controls && !this.transitioningCameraTarget && wasClick) {
                 this.getRenderDimensions(renderDimensions);
                 outHits.length = 0;
                 this.raycaster.setFromCameraAndScreenPosition(this.camera, this.mousePosition, renderDimensions);
-                this.mousePosition.set(mouse.offsetX, mouse.offsetY);
                 this.raycaster.intersectSplatMesh(this.splatMesh, outHits);
                 if (outHits.length > 0) {
                     this.previousCameraTarget.copy(this.controls.target);
@@ -133,6 +133,10 @@ export class Viewer {
         };
 
     }();
+
+    getMousePosition() {
+        return this.mousePosition;
+    }
 
     getRenderDimensions(outDimensions) {
         if (this.rootElement) {
@@ -632,7 +636,7 @@ export class Viewer {
             const currentTime = getCurrentTime();
             if (!lastUpdateTime) lastUpdateTime = currentTime;
 
-            if (this.transitioningCameraTarget) {
+            if (this.controls && this.transitioningCameraTarget) {
                 const t = (currentTime - this.transitioningCameraTargetStartTime) / 0.25;
                 tempCameraTarget.copy(this.previousCameraTarget).lerp(this.nextCameraTarget, t);
                 this.camera.lookAt(tempCameraTarget);
@@ -672,6 +676,18 @@ export class Viewer {
 
     }();
 
+    performRaycast = function() {
+        const outHits = [];
+        const renderDimensions = new THREE.Vector2();
+        return function(camera, mousePosition) {
+            this.getRenderDimensions(renderDimensions);
+            outHits.length = 0;
+            this.raycaster.setFromCameraAndScreenPosition(camera, mousePosition, renderDimensions);
+            this.raycaster.intersectSplatMesh(this.splatMesh, outHits);
+            return outHits;
+        };
+    }();
+
     updateInfo = function() {
 
         const renderDimensions = new THREE.Vector2();
@@ -685,9 +701,11 @@ export class Viewer {
                 const cameraPosString = `[${cameraPos.x.toFixed(5)}, ${cameraPos.y.toFixed(5)}, ${cameraPos.z.toFixed(5)}]`;
                 this.infoPanelCells.cameraPosition.innerHTML = cameraPosString;
 
-                const cameraLookAt = this.controls.target;
-                const cameraLookAtString = `[${cameraLookAt.x.toFixed(5)}, ${cameraLookAt.y.toFixed(5)}, ${cameraLookAt.z.toFixed(5)}]`;
-                this.infoPanelCells.cameraLookAt.innerHTML = cameraLookAtString;
+                if (this.controls) {
+                    const cameraLookAt = this.controls.target;
+                    const cameraLookAtString = `[${cameraLookAt.x.toFixed(5)}, ${cameraLookAt.y.toFixed(5)}, ${cameraLookAt.z.toFixed(5)}]`;
+                    this.infoPanelCells.cameraLookAt.innerHTML = cameraLookAtString;
+                }
 
                 if (this.showMeshCursor) {
                     const cursorPos = this.sceneHelper.meshCursor.position;
