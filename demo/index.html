@@ -9,8 +9,9 @@
   <style>
 
     body {
-      background-color: #c8d0de;
+      background-color: #a3b0be;
       height: 100vh;
+      margin: 0px;
     }
 
     .title {
@@ -36,7 +37,7 @@
       width: 1175px;
       border-radius: 5px;
       border: #a8b0bd 1px solid;
-      background-color: #e6eefc;
+      background-color: #e7e9eb;
       box-shadow: 5px 5px 10px #888888;
     }
 
@@ -59,9 +60,9 @@
       font-size: 14pt;
       font-weight: bold;
       font-family: arial;
-      border-radius: 5px;
+      border-radius: 10px;
       border: #bbbbbb 1px solid;
-      background-color: #eeeeee;
+      background-color: #f1f1f1;
       width: 340px;
       margin-left: 8px;
       margin-right: 8px;
@@ -70,26 +71,38 @@
     .table-of-contents-entry:hover {
       color: #333333;
       border-color: #8a9ba8;
-      background-color: #c7def0;
+      background-color: #e4edfc;
       cursor: pointer;
     }
 
     .table-of-contents-entry-image {
       width: 330px;
       height: 250px;
-      border-radius: 5px;
+      border-radius: 8px;
       margin-bottom: 10px;
     }
 
     .button {
-      border: #666666 1px solid;
-      background-color: #dddddd;
+      color: #3C5060;
+      border: #AEC5D7 1px solid;
+      background-color: #E5EAEE;
       padding: 5px;
+      border-radius: 3px;
+      filter: drop-shadow(2px 2px 3px #aaaaaa);
     }
 
     .button:hover{
       cursor: pointer;
-      background-color: #eeeeee;
+      color: #1B242B;
+      background-color: #E4EFF9;
+      border-color: #4A5A67;
+    }
+
+    .text-input {
+      border: #aaaaaa 1px solid;
+      background-color: #ffffff;
+      padding: 4px;
+      border-radius: 3px;
     }
 
     .splat-panel {
@@ -105,6 +118,28 @@
       background-color: #efefef;
       border-radius: 5px;
       padding: 15px;
+    }
+
+    .ply-loader {
+        width: 35px;
+        padding: 15px;
+        background: #324d70;
+        z-index:99999;
+        aspect-ratio: 1;
+        border-radius: 50%;
+        --_m:
+            conic-gradient(#0000,#000),
+            linear-gradient(#000 0 0) content-box;
+        -webkit-mask: var(--_m);
+            mask: var(--_m);
+        -webkit-mask-composite: source-out;
+            mask-composite: subtract;
+        box-sizing: border-box;
+        animation: ply-load 1s linear infinite;
+    }
+
+    @keyframes ply-load {
+        to{transform: rotate(1turn)}
     }
 
     @media (max-width: 1100px){
@@ -192,6 +227,8 @@
           setConversionError("Could not convert file.");
         } else {
           setConversionStatus("Conversion complete!");
+          setConversionLoadingIconVisibility(false);
+          setConversionCheckIconVisibility(true);
         }
         convertButton.disabled = false;
         conversionInProgress = false;
@@ -202,6 +239,8 @@
         fileReader.onload = function(){
           convertButton.disabled = true;
           setConversionStatus("Parsing .PLY...");
+          setConversionLoadingIconVisibility(true);
+          setConversionCheckIconVisibility(false);
           window.setTimeout(() => {
             try {
               convertPLY(fileReader.result, compressionLevel, alphaRemovalThreshold);
@@ -209,10 +248,11 @@
             } catch (e) {
               conversionDone(e);
             }
-          }, 1);
+          }, 100);
         }
         conversionInProgress = true;
         setConversionStatus("Loading .PLY...");
+        setConversionLoadingIconVisibility(true);
         fileReader.readAsArrayBuffer(conversionFile.files[0]);
       } catch (e) {
         conversionDone(e);
@@ -220,6 +260,8 @@
     }
 
     function setConversionError(msg) {
+      setConversionLoadingIconVisibility(false);
+      setConversionCheckIconVisibility(false);
       document.getElementById("conversionStatus").innerHTML = "";
       document.getElementById("conversionError").innerHTML = msg;
     }
@@ -227,6 +269,14 @@
     function setConversionStatus(msg) {
       document.getElementById("conversionError").innerHTML = "";
       document.getElementById("conversionStatus").innerHTML = msg;
+    }
+
+    function setConversionLoadingIconVisibility(visible) {
+      document.getElementById('loading-icon').style.display = visible ? 'block' : 'none';
+    }
+
+    function setConversionCheckIconVisibility(visible) {
+      document.getElementById('check-icon').style.display = visible ? 'block' : 'none';
     }
 
     window.viewSplat = function() {
@@ -388,7 +438,7 @@
               <tr>
                 <td colspan="2">
                   <label for="conversionFile">
-                    <span class="glyphicon glyphicon-folder-open" aria-hidden="true"><span class="button">Choose file</span></span>
+                    <span aria-hidden="true"><span class="button">Choose file</span></span>
                     <input type="file" id="conversionFile" style="display:none" onchange="window.onFileChange(this, 'conversionFileName')">
                   </label>
                   <span id="conversionFileName" style="padding-left:15px; color: #333333">(No file chosen)</span>
@@ -402,7 +452,7 @@
                   Compression level:
                 </td>
                 <td>
-                  <input id="compressionLevel" type="text" style="width: 50px" value="1"></input>
+                  <input id="compressionLevel" type="text" class="text-input" style="width: 50px" value="1"></input>
                 </td>
               </tr>
               <tr>
@@ -410,7 +460,7 @@
                   Alpha removal threshold:&nbsp;
                 </td>
                 <td>
-                  <input id="alphaRemovalThreshold" type="text" style="width: 50px" value="1"></input>
+                  <input id="alphaRemovalThreshold" type="text" class="text-input" style="width: 50px" value="1"></input>
                 </td>
               </tr>
             </table>
@@ -418,7 +468,22 @@
             <span id="convertButton" class="button" onclick="window.convertPlyFile()">Convert</span>
             <br>
             <br>
-            <span id="conversionStatus" style="color: #333333"></span>
+            <div style="text-align: center;">
+              <div style="display: flex; flex-direction: row; width: 230px; margin: auto;">
+                <div style="width: 50px;">
+                  <div id="loading-icon" class="ply-loader" style="display: none;">
+                  </div>
+                  <div id="check-icon" class="check" style="display: none;">
+                    <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" height="35px" width="35px" version="1.1" id="Capa_1" viewBox="0 0 17.837 17.837" xml:space="preserve" style="background:#ffffff00;">
+                      <g>
+                        <path style="fill:#00790a;" d="M16.145,2.571c-0.272-0.273-0.718-0.273-0.99,0L6.92,10.804l-4.241-4.27   c-0.272-0.274-0.715-0.274-0.989,0L0.204,8.019c-0.272,0.271-0.272,0.717,0,0.99l6.217,6.258c0.272,0.271,0.715,0.271,0.99,0   L17.63,5.047c0.276-0.273,0.276-0.72,0-0.994L16.145,2.571z"/>
+                      </g>
+                      </svg>
+                  </div>
+                </div>
+                <div id="conversionStatus" style="text-align: left; color: #333333; margin-top: 7px; margin-left: 15px; width: 175px"></div>
+              </div>
+            </div>
             <span id="conversionError" style="color: #ff0000"></span>
             <br>
           </div>
@@ -432,7 +497,7 @@
               <tr>
                 <td colspan="2">
                   <label for="viewFile">
-                    <span class="glyphicon glyphicon-folder-open" aria-hidden="true"><span class="button">Choose file</span></span>
+                    <span aria-hidden="true"><span class="button">Choose file</span></span>
                     <input type="file" id="viewFile" style="display:none" onchange="window.onFileChange(this, 'viewFileName')">
                   </label>
                   <span id="viewFileName" style="padding-left:15px; color: #333333">(No file chosen)</span>
@@ -446,7 +511,7 @@
                   Alpha removal threshold:&nbsp;
                 </td>
                 <td>
-                  <input id="alphaRemovalThresholdView" type="text" style="width: 50px" value="1"></input>
+                  <input id="alphaRemovalThresholdView" type="text" class="text-input" style="width: 50px" value="1"></input>
                 </td>
               </tr>
               <tr>
@@ -454,7 +519,7 @@
                   Camera up:&nbsp;
                 </td>
                 <td>
-                  <input id="cameraUp" type="text" style="width: 50px" value="0, 1, 0"></input>
+                  <input id="cameraUp" type="text" class="text-input" style="width: 90px" value="0, 1, 0"></input>
                 </td>
               </tr>
               <tr>
@@ -462,7 +527,7 @@
                   Camera position:&nbsp;
                 </td>
                 <td>
-                  <input id="cameraPosition" type="text" style="width: 100px" value="0, 1, 0"></input>
+                  <input id="cameraPosition" type="text" class="text-input" style="width: 90px" value="0, 1, 0"></input>
                 </td>
               </tr>
               <tr>
@@ -470,7 +535,7 @@
                   Camera look-at:&nbsp;
                 </td>
                 <td>
-                  <input id="cameraLookAt" type="text" style="width: 100px" value="1, 0, 0"></input>
+                  <input id="cameraLookAt" type="text" class="text-input" style="width: 90px" value="1, 0, 0"></input>
                 </td>
               </tr>
             </table>
