@@ -6,26 +6,56 @@ When I started, web-based viewers were already available -- A WebGL-based viewer
 <br>
 <br>
 ## Highlights
- - Organized into ES modules
- - Rendering is done entirely through Three.js
- - The sorting algorithm is a C++ counting sort contained in a WASM module.
- - Rasterization code is documented to describe 2D covariance computations as well as computations of corresponding eigen-values and eigen-vectors
- - Scene is partitioned via octree that is used to cull non-visible splats prior to sorting
- - Splat data (position, covariance, color) is stored via textures so that only splat indexes are transferred between host and GPU
- - Allows a Three.js scene or object group to be rendered along with the splats
+
+- Rendering is done entirely through Three.js
+- Code is organized into modern ES modules
+- Built-in viewer is self-contained so very little code is necessary to load and view a scene
+- Allows user to import `.ply` files for conversion to custom compressed `.splat` file format
+- Allows a Three.js scene or object group to be rendered along with the splats
+
+## Known issues
+
+- Splat sort runs on the CPU – would be great to figure out a GPU-based approach
+- Artifacts are visible when you move or rotate too fast (due to CPU-based splat sort)
+- Sub-optimal performance on mobile devices
+- Custom `.splat` file format still needs work, especially around compression
+
 ## Future work
 This is still very much a work in progress! There are several things that still need to be done:
   - Improve the method by which splat data is stored in textures
   - Properly incorporate spherical harmonics data to achieve view dependent lighting effects
-  - Continue improving compression for splat files
-  - Improve splat sorting -- maybe an incremental sort of some kind?
-  - Implement double buffering so that the next splat index array in the main thread can be filled while the current one is sorted in the worker thread
+  - Continue optimizing CPU-based splat sort - maybe try an incremental sort of some kind?
   - Add editing mode, allowing users to modify scene and export changes
   - Add WebXR compatibility
   - Support very large scenes and/or multiple splat files
 
 ## Online demo
 [https://projects.markkellogg.org/threejs/demo_gaussian_splats_3d.php](https://projects.markkellogg.org/threejs/demo_gaussian_splats_3d.php)
+
+## Controls
+Mouse
+- Left click to set the focal point
+- Left click and drag to orbit around the focal point
+- Right click and drag to pan the camera and focal point
+  
+Keyboard
+- `C` Toggles the mesh cursor, showing the intersection point of a mouse-projected ray and the splat mesh
+
+- `I` Toggles an info panel that displays debugging info:
+  - Camera position
+  - Camera focal point/look-at point
+  - Camera up vector
+  - Mesh cursor position
+  - Current FPS
+  - Renderer window size
+  - Ratio of rendered splats to total splats
+  - Last splat sort duration
+
+- `P` Toggles a debug object that shows the orientation of the camera controls. It includes a green arrow representing the camera's orbital axis and a white square representing the plane at which the camera's elevation angle is 0.
+
+- `Left arrow` Rotate the camera's up vector counter-clockwise
+
+- `Right arrow` Rotate the camera's up vector clockwise
 
 <br>
 
@@ -53,7 +83,8 @@ The demo will be accessible locally at [http://127.0.0.1:8080/index.html](http:/
 The demo scene data is available here: [https://projects.markkellogg.org/downloads/gaussian_splat_data.zip](https://projects.markkellogg.org/downloads/gaussian_splat_data.zip)
 <br>
 <br>
-## Usage
+
+## Basic Usage
 
 To run the built-in viewer:
 
@@ -64,7 +95,6 @@ const viewer = new GaussianSplats3D.Viewer({
     'initialCameraLookAt': [0, 4, 0],
     'ignoreDevicePixelRatio': false
 });
-viewer.init();
 viewer.loadFile('<path to .ply or .splat file>', {
     'splatAlphaRemovalThreshold': 5, // out of 255
     'halfPrecisionCovariancesOnGPU': true
@@ -88,7 +118,6 @@ const viewer = new GaussianSplats3D.Viewer({
 });
 const orientation = new THREE.Quaternion();
 orientation.setFromUnitVectors(new THREE.Vector3(0, -1, -0.6).normalize(), new THREE.Vector3(0, 1, 0));
-viewer.init();
 viewer.loadFile('<path to .ply or .splat file>', {
     'splatAlphaRemovalThreshold': 5, // out of 255
     'halfPrecisionCovariancesOnGPU': true,
@@ -143,7 +172,6 @@ const viewer = new GaussianSplats3D.Viewer({
     'initialCameraPosition': [-1, -4, 6],
     'initialCameraLookAt': [0, 4, -0]
 });
-viewer.init();
 viewer.loadFile('<path to .ply or .splat file>')
 .then(() => {
     viewer.start();
@@ -181,7 +209,6 @@ const viewer = new GaussianSplats3D.Viewer({
     'camera': camera,
     'useBuiltInControls': false
 });
-viewer.init();
 viewer.loadFile('<path to .ply or .splat file>')
 .then(() => {
     requestAnimationFrame(update);
@@ -195,13 +222,3 @@ function update() {
     viewer.render();
 }
 ```
-## Controls
-Mouse
-- Left click to set the focal point
-- Left click and drag to orbit around the focal point
-- Right click and drag to pan the camera and focal point
-  
-Keyboard
-- `C` Toggles the mesh cursor, which shows where a ray projected from the mouse cursor intersects the splat mesh
-
-- `I` Toggles an info panel that displays the mesh cursor position, current FPS, and current window size
