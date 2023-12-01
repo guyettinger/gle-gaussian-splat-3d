@@ -1,3 +1,7 @@
+<a href="/">
+    <img alt="logo" src="public/images/logo-flipped.png" align="right" width="120" height="120"/>
+</a>
+
 # Typed fork of Mark Kellogg's 3D Gaussian splatting for Three.js
 [![Version](https://img.shields.io/npm/v/gle-gaussian-splat-3d?style=flat&colorA=000000&colorB=000000)](https://www.npmjs.com/package/gle-gaussian-splat-3d)
 [![Downloads](https://img.shields.io/npm/dt/gle-gaussian-splat-3d.svg?style=flat&colorA=000000&colorB=000000)](https://www.npmjs.com/package/gle-gaussian-splat-3d)
