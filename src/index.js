@@ -6,6 +6,8 @@ import { SplatLoader } from './SplatLoader.js';
 import { SplatBuffer } from './SplatBuffer.js';
 import { SplatMesh } from './SplatMesh.js';
 import { Viewer } from './Viewer.js';
+import { RenderableViewer } from './RenderableViewer.js';
+import { OrbitControls } from './OrbitControls.js';
 
 export {
     Hit,
@@ -18,5 +20,7 @@ export {
     SplatLoader,
     SplatBuffer,
     SplatMesh,
-    Viewer
+    Viewer,
+    RenderableViewer,
+    OrbitControls
 };
