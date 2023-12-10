@@ -2,15 +2,23 @@ import * as THREE from 'three';
 import { SplatTree } from './splattree/SplatTree.js';
 import { uintEncodedFloat, rgbaToInteger } from './Util.js';
 
+const dummyGeometry = new THREE.BufferGeometry();
+
+/**
+ * SplatMesh: Container for one or more SplatBuffer instances, abstracting them into a single unified container for
+ * splat data. Additionally contains data structures and code to make the splat data renderable as a Three.js mesh.
+ */
 export class SplatMesh extends THREE.Mesh {
 
     constructor(halfPrecisionCovariancesOnGPU = false, devicePixelRatio = 1, enableDistancesComputationOnGPU = true) {
-        super({'morphAttributes': {}, 'fake': true}, null);
+        super(dummyGeometry, null);
         this.renderer = undefined;
         this.halfPrecisionCovariancesOnGPU = halfPrecisionCovariancesOnGPU;
         this.devicePixelRatio = devicePixelRatio;
         this.enableDistancesComputationOnGPU = enableDistancesComputationOnGPU;
         this.splatBuffers = [];
+        this.splatBufferOptions = [];
+        this.splatBufferTransforms = [];
         this.splatTree = null;
         this.splatDataTextures = null;
         this.distancesTransformFeedback = {
@@ -21,12 +29,20 @@ export class SplatMesh extends THREE.Mesh {
             'centersBuffer': null,
             'outDistancesBuffer': null,
             'centersLoc': -1,
-            'viewProjLoc': -1,
+            'modelViewProjLoc': -1,
         };
+        this.globalSplatIndexToLocalSplatIndexMap = {};
+        this.globalSplatIndexToSplatBufferIndexMap = {};
     }
 
+    /**
+     * Build the Three.js material that is used to render the splats scene.
+     * @return {THREE.ShaderMaterial}
+     */
     static buildMaterial() {
 
+        // Contains the code to project 3D covariance to 2D and from there calculate the quad (using the eigen vectors of the
+        // 2D covariance) that is ultimately rasterized.
         const vertexShaderSource = `
             precision highp float;
             #include <common>
@@ -208,13 +224,18 @@ export class SplatMesh extends THREE.Mesh {
         return material;
     }
 
-    static buildGeomtery(splatBuffers) {
-
-        let totalSplatCount = SplatMesh.getTotalSplatCount(splatBuffers);
+    /**
+     * Build the Three.js geometry that will be used to render the splats scene. The geometry is instanced and is made up of
+     * vertices for a single quad as well as an attribute buffer for the splat indexes.
+     * @param {number} maxSplatCount The maximum number of splats that the geometry will need to accomodate
+     * @return {THREE.InstancedBufferGeometry}
+     */
+    static buildGeomtery(maxSplatCount) {
 
         const baseGeometry = new THREE.BufferGeometry();
         baseGeometry.setIndex([0, 1, 2, 0, 2, 3]);
 
+        // Vertices for the instanced quad
         const positionsArray = new Float32Array(4 * 3);
         const positions = new THREE.BufferAttribute(positionsArray, 3);
         baseGeometry.setAttribute('position', positions);
@@ -226,25 +247,177 @@ export class SplatMesh extends THREE.Mesh {
 
         const geometry = new THREE.InstancedBufferGeometry().copy(baseGeometry);
 
-        const splatIndexArray = new Uint32Array(totalSplatCount);
+        // Splat index buffer
+        const splatIndexArray = new Uint32Array(maxSplatCount);
         const splatIndexes = new THREE.InstancedBufferAttribute(splatIndexArray, 1, false);
         splatIndexes.setUsage(THREE.DynamicDrawUsage);
         geometry.setAttribute('splatIndex', splatIndexes);
 
-        geometry.instanceCount = totalSplatCount;
+        geometry.instanceCount = maxSplatCount;
 
         return geometry;
     }
 
+    /**
+     * Build a Three.js transformation matrix for each splat buffer based on options (position, scale, rotation)
+     * passed to the splat mesh during the build process. These are all optional and allow for the customization of
+     * a given splat buffer's position, scale, and orientation relative to the others.
+     * @param {Array<object>} splatBufferOptions Array of options objects: {
+     *
+     *         position (Array<number>):   Position of the scene, acts as an offset from its default position.
+     *                                     Defaults to [0, 0, 0]
+     *
+     *         rotation (Array<number>):   Rotation of the scene represented as a quaternion.
+     *                                     Defaults to [0, 0, 0, 1]
+     *
+     *         scale (Array<number>):      Scene's scale, defaults to [1, 1, 1]
+     * }
+     * @param {Array<THREE.Matrix4>} splatBufferTransforms Existing transforms, if there are any
+     * @return {Array<THREE.Matrix4>}
+     */
+    static buildSplatBufferTransforms(splatBufferOptions, splatBufferTransforms = null) {
+        splatBufferTransforms = splatBufferTransforms || [];
+        splatBufferTransforms.length = splatBufferOptions.length;
+        for (let i = 0; i < splatBufferOptions.length; i++) {
+            if (!splatBufferTransforms[i]) {
+                const options = splatBufferOptions[i];
+                if (options) {
+                    let positionArray = options['position'] || [0, 0, 0];
+                    let rotationArray = options['rotation'] || [0, 0, 0, 1];
+                    let scaleArray = options['scale'] || [1, 1, 1];
+                    const position = new THREE.Vector3().fromArray(positionArray);
+                    const rotation = new THREE.Quaternion().fromArray(rotationArray);
+                    const scale = new THREE.Vector3().fromArray(scaleArray);
+                    const splatBufferTransform = new THREE.Matrix4();
+                    splatBufferTransform.compose(position, rotation, scale);
+                    splatBufferTransforms[i] = splatBufferTransform;
+                }
+            }
+        }
+        return splatBufferTransforms;
+    }
+
+    /**
+     * Build data structures that map global splat indexes (based on a unified index across all splat buffers) to
+     * local data within a single splat buffer.
+     * @param {Array<SplatBuffer>} splatBuffers Instances of SplatBuffer off which to build the maps
+     * @return {object}
+     */
+    static buildSplatIndexMaps(splatBuffers) {
+        const localSplatIndexMap = new Map();
+        const splatBufferIndexMap = new Map();
+        let totalSplatCount = 0;
+        for (let s = 0; s < splatBuffers.length; s++) {
+            const splatBuffer = splatBuffers[s];
+            const splatCount = splatBuffer.getSplatCount();
+            for (let i = 0; i < splatCount; i++) {
+                localSplatIndexMap[totalSplatCount] = i;
+                splatBufferIndexMap[totalSplatCount] = s;
+                totalSplatCount++;
+            }
+        }
+        return {
+            localSplatIndexMap,
+            splatBufferIndexMap
+        };
+    }
+
+    /**
+     * Build an instance of SplatTree (a specialized octree) for the given splat mesh.
+     * @param {SplatMesh} splatMesh SplatMesh instance for which the splat tree will be built
+     * @return {SplatTree}
+     */
+    static buildSplatTree(splatMesh) {
+        // TODO: expose SplatTree constructor parameters (maximumDepth and maxCentersPerNode) so that they can
+        // be configured on a per-scene basis
+        const splatTree = new SplatTree(8, 1000);
+        console.time('SplatTree build');
+        const splatColor = new THREE.Vector4();
+        splatTree.processSplatMesh(splatMesh, (splatIndex) => {
+            splatMesh.getSplatColor(splatIndex, splatColor);
+            const splatBufferIndex = splatMesh.getSplatBufferIndexForSplat(splatIndex);
+            const splatBufferOptions = splatMesh.splatBufferOptions[splatBufferIndex];
+            return splatColor.w > (splatBufferOptions.splatAlphaRemovalThreshold || 1);
+        });
+        console.timeEnd('SplatTree build');
+
+        let leavesWithVertices = 0;
+        let avgSplatCount = 0;
+        let maxSplatCount = 0;
+        let nodeCount = 0;
+
+        splatTree.visitLeaves((node) => {
+            const nodeSplatCount = node.data.indexes.length;
+            if (nodeSplatCount > 0) {
+                avgSplatCount += nodeSplatCount;
+                maxSplatCount = Math.max(maxSplatCount, nodeSplatCount);
+                nodeCount++;
+                leavesWithVertices++;
+            }
+        });
+        console.log(`SplatTree leaves: ${splatTree.countLeaves()}`);
+        console.log(`SplatTree leaves with splats:${leavesWithVertices}`);
+        avgSplatCount = avgSplatCount / nodeCount;
+        console.log(`Avg splat count per node: ${avgSplatCount}`);
+        return splatTree;
+    }
+
+    /**
+     * Construct this instance of SplatMesh.
+     * @param {Array<SplatBuffer>} splatBuffers The base splat data, instances of SplatBuffer
+     * @param {Array<object>} splatBufferOptions Dynamic options for each splat buffer {
+     *
+     *         splatAlphaRemovalThreshold: Ignore any splats with an alpha less than the specified
+     *                                     value (valid range: 0 - 255). Defaults to 1.
+     *
+     *         position (Array<number>):   Position of the scene, acts as an offset from its default position.
+     *                                     Defaults to [0, 0, 0]
+     *
+     *         rotation (Array<number>):   Rotation of the scene represented as a quaternion.
+     *                                     Defaults to [0, 0, 0, 1]
+     *
+     *         scale (Array<number>):      Scene's scale, defaults to [1, 1, 1]
+     *
+     * }
+     * @param {Boolean} keepExistingSplatBufferTransforms If the transform for a splat buffer has been changed since a
+     *                                                    previous call to build(), this flag says to preserve it. The assumption
+     *                                                    is that the current call to build() will be using the same splat buffers
+     *                                                    as the previous call.
+     */
+    build(splatBuffers, splatBufferOptions, keepExistingSplatBufferTransforms = true) {
+        this.disposeMeshData();
+        const totalSplatCount = SplatMesh.getTotalSplatCountForSplatBuffers(splatBuffers);
+        this.splatBufferTransforms = SplatMesh.buildSplatBufferTransforms(splatBufferOptions, keepExistingSplatBufferTransforms ?
+                                                                          this.splatBufferTransforms : null);
+        this.geometry = SplatMesh.buildGeomtery(totalSplatCount);
+        this.material = SplatMesh.buildMaterial();
+        const indexMaps = SplatMesh.buildSplatIndexMaps(splatBuffers);
+        this.globalSplatIndexToLocalSplatIndexMap = indexMaps.localSplatIndexMap;
+        this.globalSplatIndexToSplatBufferIndexMap = indexMaps.splatBufferIndexMap;
+        this.splatTree = SplatMesh.buildSplatTree(this);
+
+        this.splatBuffers = splatBuffers;
+        this.splatBufferOptions = splatBufferOptions;
+
+        if (this.enableDistancesComputationOnGPU) this.setupDistancesComputationTransformFeedback();
+        this.resetDataFromSplatBuffer();
+    }
+
+    /**
+     * Dispose all resources held by the splat mesh
+     */
     dispose() {
         this.disposeMeshData();
         if (this.enableDistancesComputationOnGPU) {
-            this.disposeGPUResources();
+            this.disposeDistancesComputationGPUResources();
         }
     }
 
+    /**
+     * Dispose of only the Three.js mesh resources (geometry, material, and texture)
+     */
     disposeMeshData() {
-        if (this.geometry && !this.geometry.fake) {
+        if (this.geometry && this.geometry !== dummyGeometry) {
             this.geometry.dispose();
             this.geometry = null;
         }
@@ -265,102 +438,34 @@ export class SplatMesh extends THREE.Mesh {
         this.splatTree = null;
     }
 
-    build(splatBuffers, splatBufferOptions) {
-        this.disposeMeshData();
-        this.splatBuffers = splatBuffers;
-        this.splatBufferOptions = splatBufferOptions;
-        this.buildSplatTransforms();
-        this.geometry = SplatMesh.buildGeomtery(this.splatBuffers);
-        this.material = SplatMesh.buildMaterial();
-        this.buildSplatTree();
-        if (this.enableDistancesComputationOnGPU) {
-            this.setupDistancesTransformFeedback();
-        }
-        this.resetLocalSplatDataAndTexturesFromSplatBuffer();
-    }
-
-    buildSplatTransforms() {
-        this.splatTransforms = [];
-        for (let splatBufferOptions of this.splatBufferOptions) {
-            if (splatBufferOptions) {
-                let positionArray = splatBufferOptions['position'] || [0, 0, 0];
-                let rotationArray = splatBufferOptions['rotation'] || [0, 0, 0, 1];
-                let scaleArray = splatBufferOptions['scale'] || [1, 1, 1];
-                const position = new THREE.Vector3().fromArray(positionArray);
-                const rotation = new THREE.Quaternion().fromArray(rotationArray);
-                const scale = new THREE.Vector3().fromArray(scaleArray);
-                const transform = new THREE.Matrix4();
-                transform.compose(position, rotation, scale);
-                this.splatTransforms.push(transform);
-            }
-        }
-    }
-
-    buildSplatTree() {
-
-        this.splatTree = new SplatTree(8, 1000);
-        console.time('SplatTree build');
-        const splatColor = new THREE.Vector4();
-        this.splatTree.processSplatMesh(this, (splatBufferIndex, splatBuffer, splatLocalIndex, transform) => {
-            splatBuffer.getColor(splatLocalIndex, splatColor, transform);
-            const splatBufferOptions = this.splatBufferOptions[splatBufferIndex];
-            return splatColor.w > (splatBufferOptions.splatAlphaRemovalThreshold || 1);
-        });
-        console.timeEnd('SplatTree build');
-
-        let leavesWithVertices = 0;
-        let avgSplatCount = 0;
-        let maxSplatCount = 0;
-        let nodeCount = 0;
-
-        this.splatTree.visitLeaves((node) => {
-            const nodeSplatCount = node.data.indexes.length;
-            if (nodeSplatCount > 0) {
-                avgSplatCount += nodeSplatCount;
-                maxSplatCount = Math.max(maxSplatCount, nodeSplatCount);
-                nodeCount++;
-                leavesWithVertices++;
-            }
-        });
-        console.log(`SplatTree leaves: ${this.splatTree.countLeaves()}`);
-        console.log(`SplatTree leaves with splats:${leavesWithVertices}`);
-        avgSplatCount = avgSplatCount / nodeCount;
-        console.log(`Avg splat count per node: ${avgSplatCount}`);
-    }
-
     getSplatTree() {
         return this.splatTree;
     }
 
-    resetLocalSplatDataAndTexturesFromSplatBuffer() {
-        this.updateLocalSplatDataFromSplatBuffer();
-        this.allocateAndStoreLocalSplatDataInTextures();
+    /**
+     * Refresh data textures and GPU buffers for splat distance pre-computation with data from the splat buffers for this mesh.
+     */
+    resetDataFromSplatBuffer() {
+        this.uploadSplatDataToTextures();
         if (this.enableDistancesComputationOnGPU) {
-            this.updateCentersGPUBufferForDistancesComputation();
+            this.updateGPUCentersBufferForDistancesComputation();
         }
     }
 
-    updateLocalSplatDataFromSplatBuffer() {
+    /**
+     * Refresh data textures with data from the splat buffers for this mesh.
+     */
+    uploadSplatDataToTextures() {
+
         const splatCount = this.getSplatCount();
-        this.covariances = new Float32Array(splatCount * 6);
-        this.centers = new Float32Array(splatCount * 3);
-        this.colors = new Uint8Array(splatCount * 4);
 
-        let offset = 0;
-        for (let i = 0; i < this.splatBuffers.length; i++) {
-            const splatBuffer = this.splatBuffers[i];
-            const transform = this.splatTransforms[i];
-            splatBuffer.fillCovarianceArray(this.covariances, offset, transform);
-            splatBuffer.fillCenterArray(this.centers, offset, transform);
-            splatBuffer.fillColorArray(this.colors, offset, transform);
-            offset += splatBuffer.getSplatCount();
-        }
-    }
+        const covariances = new Float32Array(splatCount * 6);
+        const centers = new Float32Array(splatCount * 3);
+        const colors = new Uint8Array(splatCount * 4);
+        this.fillSplatDataArrays(covariances, centers, colors);
 
-    allocateAndStoreLocalSplatDataInTextures() {
         const COVARIANCES_ELEMENTS_PER_TEXEL = 2;
         const CENTER_COLORS_ELEMENTS_PER_TEXEL = 4;
-        const splatCount = this.getSplatCount();
 
         const covariancesTextureSize = new THREE.Vector2(4096, 1024);
         while (covariancesTextureSize.x * covariancesTextureSize.y * COVARIANCES_ELEMENTS_PER_TEXEL < splatCount * 6) {
@@ -376,14 +481,14 @@ export class SplatMesh extends THREE.Mesh {
         let paddedCovariances;
         if (this.halfPrecisionCovariancesOnGPU) {
             paddedCovariances = new Uint16Array(covariancesTextureSize.x * covariancesTextureSize.y * COVARIANCES_ELEMENTS_PER_TEXEL);
-            for (let i = 0; i < this.covariances.length; i++) {
-                paddedCovariances[i] = THREE.DataUtils.toHalfFloat(this.covariances[i]);
+            for (let i = 0; i < covariances.length; i++) {
+                paddedCovariances[i] = THREE.DataUtils.toHalfFloat(covariances[i]);
             }
             covariancesTexture = new THREE.DataTexture(paddedCovariances, covariancesTextureSize.x,
                                                        covariancesTextureSize.y, THREE.RGFormat, THREE.HalfFloatType);
         } else {
             paddedCovariances = new Float32Array(covariancesTextureSize.x * covariancesTextureSize.y * COVARIANCES_ELEMENTS_PER_TEXEL);
-            paddedCovariances.set(this.covariances);
+            paddedCovariances.set(covariances);
             covariancesTexture = new THREE.DataTexture(paddedCovariances, covariancesTextureSize.x,
                                                        covariancesTextureSize.y, THREE.RGFormat, THREE.FloatType);
         }
@@ -397,11 +502,11 @@ export class SplatMesh extends THREE.Mesh {
             const colorsBase = c * 4;
             const centersBase = c * 3;
             const centerColorsBase = c * 4;
-            paddedCenterColors[centerColorsBase] = rgbaToInteger(this.colors[colorsBase], this.colors[colorsBase + 1],
-                                                                 this.colors[colorsBase + 2], this.colors[colorsBase + 3]);
-            paddedCenterColors[centerColorsBase + 1] = uintEncodedFloat(this.centers[centersBase]);
-            paddedCenterColors[centerColorsBase + 2] = uintEncodedFloat(this.centers[centersBase + 1]);
-            paddedCenterColors[centerColorsBase + 3] = uintEncodedFloat(this.centers[centersBase + 2]);
+            paddedCenterColors[centerColorsBase] = rgbaToInteger(colors[colorsBase], colors[colorsBase + 1],
+                                                                 colors[colorsBase + 2], colors[colorsBase + 3]);
+            paddedCenterColors[centerColorsBase + 1] = uintEncodedFloat(centers[centersBase]);
+            paddedCenterColors[centerColorsBase + 2] = uintEncodedFloat(centers[centersBase + 1]);
+            paddedCenterColors[centerColorsBase + 3] = uintEncodedFloat(centers[centersBase + 2]);
         }
         const centersColorsTexture = new THREE.DataTexture(paddedCenterColors, centersColorsTextureSize.x,
                                                            centersColorsTextureSize.y, THREE.RGBAIntegerFormat, THREE.UnsignedIntType);
@@ -425,27 +530,16 @@ export class SplatMesh extends THREE.Mesh {
         };
     }
 
-    updateSplatDataToDataTextures() {
-        this.updateLocalCovarianceDataToDataTexture();
-        this.updateLocalCenterColorDataToDataTexture();
-    }
-
-    updateLocalCovarianceDataToDataTexture() {
-        this.splatDataTextures.covariances.data.set(this.covariances);
-        this.splatDataTextures.covariances.texture.needsUpdate = true;
-    }
-
-    updateLocalCenterColorDataToDataTexture() {
-        this.splatDataTextures.centerColors.data.set(this.centerColors);
-        this.splatDataTextures.centerColors.texture.needsUpdate = true;
-    }
-
-    updateIndexes(indexes, renderSplatCount) {
+    /**
+     * Set the indexes of splats that should be rendered; should be sorted in desired render order.
+     * @param {Uint32Array} globalIndexes Sorted index list of splats to be rendered
+     * @param {number} renderSplatCount Total number of splats to be rendered. Necessary because we may not want to render
+     *                                  every splat.
+     */
+    updateRenderIndexes(globalIndexes, renderSplatCount) {
         const geometry = this.geometry;
-
-        geometry.attributes.splatIndex.set(indexes);
+        geometry.attributes.splatIndex.set(globalIndexes);
         geometry.attributes.splatIndex.needsUpdate = true;
-
         geometry.instanceCount = renderSplatCount;
     }
 
@@ -472,16 +566,16 @@ export class SplatMesh extends THREE.Mesh {
     }
 
     getSplatCount() {
-        return SplatMesh.getTotalSplatCount(this.splatBuffers);
+        return SplatMesh.getTotalSplatCountForSplatBuffers(this.splatBuffers);
     }
 
-    static getTotalSplatCount(splatBuffers) {
+    static getTotalSplatCountForSplatBuffers(splatBuffers) {
         let totalSplatCount = 0;
         for (let splatBuffer of splatBuffers) totalSplatCount += splatBuffer.getSplatCount();
         return totalSplatCount;
     }
 
-    disposeGPUResources() {
+    disposeDistancesComputationGPUResources() {
 
         if (!this.renderer) return;
 
@@ -499,14 +593,14 @@ export class SplatMesh extends THREE.Mesh {
             this.distancesTransformFeedback.vertexShader = null;
             this.distancesTransformFeedback.fragmentShader = null;
         }
-        this.disposeGPUBufferResources();
+        this.disposeDistancesComputationGPUBufferResources();
         if (this.distancesTransformFeedback.id) {
             gl.deleteTransformFeedback(this.distancesTransformFeedback.id);
             this.distancesTransformFeedback.id = null;
         }
     }
 
-    disposeGPUBufferResources() {
+    disposeDistancesComputationGPUBufferResources() {
 
         if (!this.renderer) return;
 
@@ -526,13 +620,13 @@ export class SplatMesh extends THREE.Mesh {
         if (renderer !== this.renderer) {
             this.renderer = renderer;
             if (this.enableDistancesComputationOnGPU && this.getSplatCount() > 0) {
-                this.setupDistancesTransformFeedback();
-                this.updateCentersGPUBufferForDistancesComputation();
+                this.setupDistancesComputationTransformFeedback();
+                this.updateGPUCentersBufferForDistancesComputation();
             }
         }
     }
 
-    setupDistancesTransformFeedback = function() {
+    setupDistancesComputationTransformFeedback = function() {
 
         let currentRenderer;
         let currentSplatCount;
@@ -544,9 +638,9 @@ export class SplatMesh extends THREE.Mesh {
             const rebuildGPUObjects = (currentRenderer !== this.renderer);
             const rebuildBuffers = currentSplatCount !== splatCount;
             if (rebuildGPUObjects) {
-                this.disposeGPUResources();
+                this.disposeDistancesComputationGPUResources();
             } else if (rebuildBuffers) {
-                this.disposeGPUBufferResources();
+                this.disposeDistancesComputationGPUBufferResources();
             }
 
             const gl = this.renderer.getContext();
@@ -578,10 +672,10 @@ export class SplatMesh extends THREE.Mesh {
             const vsSource =
             `#version 300 es
                 in ivec3 center;
-                uniform ivec3 viewProj;
+                uniform ivec3 modelViewProj;
                 flat out int distance;
                 void main(void) {
-                    distance = center.x * viewProj.x + center.y * viewProj.y + center.z * viewProj.z;
+                    distance = center.x * modelViewProj.x + center.y * modelViewProj.y + center.z * modelViewProj.z;
                 }
             `;
 
@@ -630,8 +724,10 @@ export class SplatMesh extends THREE.Mesh {
 
             gl.useProgram(this.distancesTransformFeedback.program);
 
-            this.distancesTransformFeedback.centersLoc = gl.getAttribLocation(this.distancesTransformFeedback.program, 'center');
-            this.distancesTransformFeedback.viewProjLoc = gl.getUniformLocation(this.distancesTransformFeedback.program, 'viewProj');
+            this.distancesTransformFeedback.centersLoc =
+                gl.getAttribLocation(this.distancesTransformFeedback.program, 'center');
+            this.distancesTransformFeedback.modelViewProjLoc =
+                gl.getUniformLocation(this.distancesTransformFeedback.program, 'modelViewProj');
 
             if (rebuildGPUObjects || rebuildBuffers) {
                 this.distancesTransformFeedback.centersBuffer = gl.createBuffer();
@@ -661,31 +757,10 @@ export class SplatMesh extends THREE.Mesh {
 
     }();
 
-    getIntegerCenters(padFour) {
-        const splatCount = this.getSplatCount();
-        const floatCenters = new Float32Array(this.centers);
-        let intCenters;
-        let componentCount = padFour ? 4 : 3;
-        intCenters = new Int32Array(splatCount * componentCount);
-        for (let i = 0; i < splatCount; i++) {
-            for (let t = 0; t < 3; t++) {
-                intCenters[i * componentCount + t] = Math.round(floatCenters[i * 3 + t] * 1000.0);
-            }
-            if (padFour) intCenters[i * componentCount + 3] = 1;
-        }
-        return intCenters;
-    }
-
-    getIntegerMatrixArray(matrix) {
-        const matrixElements = matrix.elements;
-        const intMatrixArray = [];
-        for (let i = 0; i < 16; i++) {
-            intMatrixArray[i] = Math.round(matrixElements[i] * 1000.0);
-        }
-        return intMatrixArray;
-    }
-
-    updateCentersGPUBufferForDistancesComputation() {
+    /**
+     * Refresh GPU buffers used for pre-computing splat distances with centers data from the splat buffers for this mesh.
+     */
+    updateGPUCentersBufferForDistancesComputation() {
 
         if (!this.renderer) return;
 
@@ -701,11 +776,11 @@ export class SplatMesh extends THREE.Mesh {
         if (currentVao) gl.bindVertexArray(currentVao);
     }
 
-    computeDistancesOnGPU(viewProjMatrix, outComputedDistances) {
+    computeDistancesOnGPU(modelViewProjMatrix, outComputedDistances) {
 
         if (!this.renderer) return;
 
-        const iViewProjMatrix = this.getIntegerMatrixArray(viewProjMatrix);
+        const iViewProjMatrix = SplatMesh.getIntegerMatrixArray(modelViewProjMatrix);
         const iViewProj = [iViewProjMatrix[2], iViewProjMatrix[6], iViewProjMatrix[10]];
 
         // console.time("gpu_compute_distances");
@@ -719,7 +794,7 @@ export class SplatMesh extends THREE.Mesh {
 
         gl.enable(gl.RASTERIZER_DISCARD);
 
-        gl.uniform3i(this.distancesTransformFeedback.viewProjLoc, iViewProj[0], iViewProj[1], iViewProj[2]);
+        gl.uniform3i(this.distancesTransformFeedback.modelViewProjLoc, iViewProj[0], iViewProj[1], iViewProj[2]);
 
         gl.bindBuffer(gl.ARRAY_BUFFER, this.distancesTransformFeedback.centersBuffer);
         gl.enableVertexAttribArray(this.distancesTransformFeedback.centersLoc);
@@ -746,5 +821,131 @@ export class SplatMesh extends THREE.Mesh {
         if (currentProgram) gl.useProgram(currentProgram);
         if (currentVao) gl.bindVertexArray(currentVao);
 
+    }
+
+    /**
+     * Given a global splat index, return corresponding local data (splat buffer, index of splat in that splat
+     * buffer, and the corresponding transform)
+     * @param {number} globalIndex Global splat index
+     * @param {object} paramsObj Object in which to store local data
+     */
+    getLocalSplatParameters(globalIndex, paramsObj) {
+        paramsObj.splatBuffer = this.getSplatBufferForSplat(globalIndex);
+        paramsObj.localIndex = this.getSplatLocalIndex(globalIndex);
+        paramsObj.splatBufferTransform = this.getSplatBufferTransformForSplat(globalIndex);
+    }
+
+    /**
+     * Fill arrays with splat data and apply transforms if appropriate. Each array is optional.
+     * @param {Float32Array} covariances Target storage for splat covariances
+     * @param {Float32Array} centers Target storage for splat centers
+     * @param {Uint8Array} colors Target storage for splat colors
+     */
+    fillSplatDataArrays(covariances, centers, colors) {
+        let offset = 0;
+        for (let i = 0; i < this.splatBuffers.length; i++) {
+            const splatBuffer = this.splatBuffers[i];
+            const splatBufferTransform = this.splatBufferTransforms[i];
+            if (covariances) splatBuffer.fillSplatCovarianceArray(covariances, offset, splatBufferTransform);
+            if (centers) splatBuffer.fillSplatCenterArray(centers, offset, splatBufferTransform);
+            if (colors) splatBuffer.fillSplatColorArray(colors, offset, splatBufferTransform);
+            offset += splatBuffer.getSplatCount();
+        }
+    }
+
+    /**
+     * Convert splat centers, which are floating point values, to an array of integers and multiply
+     * each by 1000. Centers will get transformed as appropriate before conversion to integer.
+     * @param {number} padFour Enforce alignement of 4 by inserting a 1 after every 3 values.
+     * @return {Int32Array}
+     */
+    getIntegerCenters(padFour) {
+        const splatCount = this.getSplatCount();
+        const floatCenters = new Float32Array(splatCount * 3);
+        this.fillSplatDataArrays(null, floatCenters, null);
+        let intCenters;
+        let componentCount = padFour ? 4 : 3;
+        intCenters = new Int32Array(splatCount * componentCount);
+        for (let i = 0; i < splatCount; i++) {
+            for (let t = 0; t < 3; t++) {
+                intCenters[i * componentCount + t] = Math.round(floatCenters[i * 3 + t] * 1000.0);
+            }
+            if (padFour) intCenters[i * componentCount + 3] = 1;
+        }
+        return intCenters;
+    }
+
+    /**
+     * Get the center for a splat, transformed as appropriate.
+     * @param {number} globalIndex Global index of splat
+     * @param {THREE.Vector3} outCenter THREE.Vector3 instance in which to store splat center
+     */
+    getSplatCenter = function() {
+
+        const paramsObj = {};
+
+        return function(globalIndex, outCenter) {
+            this.getLocalSplatParameters(globalIndex, paramsObj);
+            paramsObj.splatBuffer.getSplatCenter(paramsObj.localIndex, outCenter, paramsObj.splatBufferTransform);
+        };
+
+    }();
+
+    /**
+     * Get the scale and rotation for a splat, transformed as appropriate.
+     * @param {number} globalIndex Global index of splat
+     * @param {THREE.Vector3} outScale THREE.Vector3 instance in which to store splat scale
+     * @param {THREE.Quaternion} outRotation THREE.Quaternion instance in which to store splat rotation
+     */
+    getSplatScaleAndRotation = function() {
+
+        const paramsObj = {};
+
+        return function(globalIndex, outScale, outRotation) {
+            this.getLocalSplatParameters(globalIndex, paramsObj);
+            paramsObj.splatBuffer.getSplatScaleAndRotation(paramsObj.localIndex, outScale, outRotation, paramsObj.splatBufferTransform);
+        };
+
+    }();
+
+    /**
+     * Get the color for a splat
+     * @param {number} globalIndex Global index of splat
+     * @param {THREE.Vector4} outColor THREE.Vector4 instance in which to store splat color
+     */
+    getSplatColor = function() {
+
+        const paramsObj = {};
+
+        return function(globalIndex, outColor) {
+            this.getLocalSplatParameters(globalIndex, paramsObj);
+            paramsObj.splatBuffer.getSplatColor(paramsObj.localIndex, outColor, paramsObj.splatBufferTransform);
+        };
+
+    }();
+
+    getSplatBufferForSplat(globalIndex) {
+        return this.splatBuffers[this.globalSplatIndexToSplatBufferIndexMap[globalIndex]];
+    }
+
+    getSplatBufferIndexForSplat(globalIndex) {
+        return this.globalSplatIndexToSplatBufferIndexMap[globalIndex];
+    }
+
+    getSplatBufferTransformForSplat(globalIndex) {
+        return this.splatBufferTransforms[this.globalSplatIndexToSplatBufferIndexMap[globalIndex]];
+    }
+
+    getSplatLocalIndex(globalIndex) {
+        return this.globalSplatIndexToLocalSplatIndexMap[globalIndex];
+    }
+
+    static getIntegerMatrixArray(matrix) {
+        const matrixElements = matrix.elements;
+        const intMatrixArray = [];
+        for (let i = 0; i < 16; i++) {
+            intMatrixArray[i] = Math.round(matrixElements[i] * 1000.0);
+        }
+        return intMatrixArray;
     }
 }

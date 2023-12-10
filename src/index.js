@@ -7,7 +7,7 @@ import { SplatBuffer } from './SplatBuffer.js';
 import { SplatMesh } from './SplatMesh.js';
 import { SplatCompressor } from './SplatCompressor.js';
 import { Viewer } from './Viewer.js';
-import { RenderableViewer } from './RenderableViewer.js';
+import { DropInViewer } from './DropInViewer.js';
 import { OrbitControls } from './OrbitControls.js';
 
 export {
@@ -23,6 +23,6 @@ export {
     SplatMesh,
     SplatCompressor,
     Viewer,
-    RenderableViewer,
+    DropInViewer,
     OrbitControls
 };
