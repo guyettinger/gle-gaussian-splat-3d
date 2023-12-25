@@ -52,6 +52,7 @@ When I started, web-based viewers were already available -- A WebGL-based viewer
 - Artifacts are visible when you move or rotate too fast (due to CPU-based splat sort)
 - Sub-optimal performance on mobile devices
 - Custom `.ksplat` file format still needs work, especially around compression
+- The default, integer based splat sort does not work well for larger scenes. In that case a value of `false` for the `integerBasedSort` viewer parameter can force a slower, floating-point based sort
 
 ## Future work
 This is still very much a work in progress! There are several things that still need to be done:
@@ -93,7 +94,7 @@ Keyboard
 <br>
 <br>
 
-## Building and running locally
+## Building from source and running locally
 Navigate to the code directory and run
 ```
 npm install
@@ -118,17 +119,25 @@ The demo scene data is available here: [https://projects.markkellogg.org/downloa
 <br>
 <br>
 
+## Installing as an NPM package
+If you don't want to build the library from source, it is also available as an NPM package. The NPM package does not come with the source code or demos that are available in the source repository. To install, run the following command:
+```
+npm install @mkkellogg/gaussian-splats-3d
+```
+
+<br>
 
 ## Basic Usage
 
 To run the built-in viewer:
 
 ```javascript
+import * as GaussianSplats3D from '@mkkellogg/gaussian-splats-3d';
+
 const viewer = new GaussianSplats3D.Viewer({
     'cameraUp': [0, -1, -0.6],
     'initialCameraPosition': [-1, -4, 6],
-    'initialCameraLookAt': [0, 4, 0],
-    'halfPrecisionCovariancesOnGPU': true,
+    'initialCameraLookAt': [0, 4, 0]
 });
 viewer.loadFile('<path to .ply, .ksplat, or .splat file>', {
     'splatAlphaRemovalThreshold': 5,
@@ -167,6 +176,8 @@ Parameters for `loadFile()`
 
 `Viewer` can also load multiple scenes simultaneously with the `loadFiles()` function:
 ```javascript
+import * as GaussianSplats3D from '@mkkellogg/gaussian-splats-3d';
+
 viewer.loadFiles([{
         'path': '<path to first .ply, .ksplat, or .splat file>',
         'splatAlphaRemovalThreshold': 20
@@ -190,6 +201,9 @@ The `loadFile()` and `loadFiles()` methods will accept the original `.ply` files
 ### Integrating THREE.js scenes
 You can integrate your own Three.js scene into the viewer if you want rendering to be handled for you. Just pass a Three.js scene object as the `scene` parameter to the constructor:
 ```javascript
+import * as GaussianSplats3D from '@mkkellogg/gaussian-splats-3d';
+import * as THREE from 'three';
+
 const scene = new THREE.Scene();
 const boxColor = 0xBBBBBB;
 const boxGeometry = new THREE.BoxGeometry(2, 2, 2);
@@ -211,6 +225,9 @@ Currently this will only work for objects that write to the depth buffer (e.g. s
 
 A "drop-in" mode for the viewer is also supported. The `DropInViewer` class encapsulates `Viewer` and can be added to a Three.js scene like any other renderable:
 ```javascript
+import * as GaussianSplats3D from '@mkkellogg/gaussian-splats-3d';
+import * as THREE from 'three';
+
 const scene = new THREE.Scene();
 const viewer = new GaussianSplats3D.DropInViewer({
     'gpuAcceleratedSort': true
@@ -235,6 +252,9 @@ scene.add(viewer);
 The viewer allows for various levels of customization via constructor parameters. You can control when its `update()` and `render()` methods are called by passing `false` for the `selfDrivenMode` parameter and then calling those methods whenever/wherever you decide is appropriate. You can also use your own camera controls, as well as an your own instance of a Three.js `Renderer` or `Camera` The sample below shows all of these options:
 
 ```javascript
+import * as GaussianSplats3D from '@mkkellogg/gaussian-splats-3d';
+import * as THREE from 'three';
+
 const renderWidth = 800;
 const renderHeight = 600;
 
@@ -260,7 +280,10 @@ const viewer = new GaussianSplats3D.Viewer({
     'camera': camera,
     'useBuiltInControls': false,
     'ignoreDevicePixelRatio': false,
-    'gpuAcceleratedSort': true
+    'gpuAcceleratedSort': true,
+    'halfPrecisionCovariancesOnGPU': true,
+    'sharedMemoryForWorkers': true,
+    'integerBasedSort': true
 });
 viewer.loadFile('<path to .ply, .ksplat, or .splat file>')
 .then(() => {
@@ -284,14 +307,18 @@ Advanced `Viewer` parameters
 | `renderer` | Pass an instance of a Three.js `Renderer` to the viewer, otherwise it will create its own. Defaults to `undefined`.
 | `camera` | Pass an instance of a Three.js `Camera` to the viewer, otherwise it will create its own. Defaults to `undefined`.
 | `ignoreDevicePixelRatio` | Tells the viewer to pretend the device pixel ratio is 1, which can boost performance on devices where it is larger, at a small cost to visual quality. Defaults to `false`.
-| `gpuAcceleratedSort` | Tells the viewer to use a partially GPU-accelerated approach to sorting splats. Currently this means pre-computation of splat distances from the camera is performed on the GPU. Defaults to `true`.
+| `gpuAcceleratedSort` | Tells the viewer to use a partially GPU-accelerated approach to sorting splats. Currently this means pre-computation of splat distances from the camera is performed on the GPU. It is recommended that this only be set to `true` when `sharedMemoryForWorkers` is also `true`. Defaults to `false` on mobile devices, `true` otherwise.
 | `halfPrecisionCovariancesOnGPU` | Tells the viewer to use 16-bit floating point values when storing splat covariance data in textures, instead of 32-bit. Defaults to `true`.
+| `sharedMemoryForWorkers` | Tells the viewer to use shared memory via a `SharedArrayBuffer` to transfer data to and from the sorting web worker. If set to `false`, it is recommended that `gpuAcceleratedSort` be set to `false` as well. Defaults to `true`.
+| `integerBasedSort` | Tells the sorting web worker to use the integer versions of relevant data to compute the distance of splats from the camera. Since integer arithmetic is faster than floating point, this reduces sort time. However it can result in integer overflows in larger scenes so it should only be used for small scenes. Defaults to `true`.
 <br>
 
 ### Creating KSPLAT files
 To convert a `.ply` or `.splat` file into the stripped-down and compressed `.ksplat` format, there are several options. The easiest method is to use the UI in the main demo page at [http://127.0.0.1:8080/index.html](http://127.0.0.1:8080/index.html). If you want to run the conversion programatically, run the following in a browser:
 
 ```javascript
+import * as GaussianSplats3D from '@mkkellogg/gaussian-splats-3d';
+
 const compressionLevel = 1;
 const splatAlphaRemovalThreshold = 5; // out of 255
 const plyLoader = new GaussianSplats3D.PlyLoader();
@@ -313,9 +340,7 @@ Currently supported values for `compressionLevel` are `0` or `1`. `0` means no c
 <br>
 
 ### CORS issues and SharedArrayBuffer
-The `Viewer` class uses shared memory (via a typed array backed by a SharedArrayBufffer) to communicate with the web worker that sorts the splats. This mechanism presents a potential security issue that is outlined here: https://web.dev/articles/cross-origin-isolation-guide.
-
-To resolve this issue, a couple of extra CORS HTTP headers need to be present in the response from the server that is sent when loading the application. Without those headers set, you might see an error like the following in the debug console:
+By default, the `Viewer` class uses shared memory (via a typed array backed by a `SharedArrayBufffer`) to communicate with the web worker that sorts the splats. This mechanism presents a potential security issue that is outlined here: https://web.dev/articles/cross-origin-isolation-guide. Shared memory can be disabled by passing `false` for the `sharedMemoryForWorkers` parameter to the constructor for `Viewer`, but if you want to leave it enabled, a couple of extra CORS HTTP headers need to be present in the response from the server that is sent when loading the application. Without those headers set, you might see an error like the following in the debug console:
 
 ```
 "DOMException: Failed to execute 'postMessage' on 'DedicatedWorkerGlobalScope': SharedArrayBuffer transfer requires self.crossOriginIsolated."

@@ -9,6 +9,7 @@ import { SplatMesh } from './SplatMesh.js';
 import { createSortWorker } from './worker/SortWorker.js';
 import { Constants } from './Constants.js';
 import { getCurrentTime } from './Util.js';
+import { AbortablePromise } from './AbortablePromise.js';
 
 const THREE_CAMERA_FOV = 50;
 const MINIMUM_DISTANCE_TO_NEW_FOCAL_POINT = .75;
@@ -38,7 +39,7 @@ export class Viewer {
         this.dropInMode = options.dropInMode || false;
 
         // If 'selfDrivenMode' is true, the viewer manages its own update/animation loop via requestAnimationFrame()
-        if (options.selfDrivenMode === undefined) options.selfDrivenMode = true;
+        if (options.selfDrivenMode === undefined || options.selfDrivenMode === null) options.selfDrivenMode = true;
         this.selfDrivenMode = options.selfDrivenMode && !this.dropInMode;
         this.selfDrivenUpdateFunc = this.selfDrivenUpdate.bind(this);
 
@@ -54,18 +55,18 @@ export class Viewer {
         this.ignoreDevicePixelRatio = options.ignoreDevicePixelRatio || false;
         this.devicePixelRatio = this.ignoreDevicePixelRatio ? 1 : window.devicePixelRatio;
 
-        // Tells the viewer to use 16-bit floating point values when storing splat covariance data in textures,
-        // instead of 32-bit.
-        if (options.halfPrecisionCovariancesOnGPU === undefined) options.halfPrecisionCovariancesOnGPU = true;
+        // Tells the viewer to use 16-bit floating point values when storing splat covariance data in textures, instead of 32-bit
+        if (options.halfPrecisionCovariancesOnGPU === undefined || options.halfPrecisionCovariancesOnGPU === null) {
+            options.halfPrecisionCovariancesOnGPU = true;
+        }
         this.halfPrecisionCovariancesOnGPU = options.halfPrecisionCovariancesOnGPU;
 
-        // If 'scene' is valid, it will be rendered by the viewer along with the splat scene
+        // If 'scene' is valid, it will be rendered by the viewer along with the splat mesh
         this.scene = options.scene;
         // Allows for usage of an external Three.js renderer
         this.renderer = options.renderer;
         // Allows for usage of an external Three.js camera
         this.camera = options.camera;
-        this.controls = null;
 
         // If 'gpuAcceleratedSort' is true, a partially GPU-accelerated approach to sorting splats will be used.
         // Currently this means pre-computing splat distances from the camera on the GPU
@@ -74,6 +75,27 @@ export class Viewer {
             if (this.isMobile()) this.gpuAcceleratedSort = false;
             else this.gpuAcceleratedSort = true;
         }
+
+        // if 'integerBasedSort' is true, the integer version of splat centers as well as other values used to calculate
+        // splat distances are used instead of the float version. This speeds up computation, but introduces the possibility of
+        // overflow in larger scenes.
+        if (options.integerBasedSort === undefined || options.integerBasedSort === null) {
+            options.integerBasedSort = true;
+        }
+        this.integerBasedSort = options.integerBasedSort;
+
+        // If 'sharedMemoryForWorkers' is true, a SharedArrayBuffer will be used to communicate with web workers. This method
+        // is faster than copying memory to or from web workers, but comes with security implications as outlined here:
+        // https://web.dev/articles/cross-origin-isolation-guide
+        // If enabled, it requires specific CORS headers to be present in the response from the server that is sent when
+        // loading the application. More information is available in the README.
+        if (options.sharedMemoryForWorkers === undefined || options.sharedMemoryForWorkers === null) options.sharedMemoryForWorkers = true;
+        this.sharedMemoryForWorkers = options.sharedMemoryForWorkers;
+
+        this.controls = null;
+
+        this.splatMesh = new SplatMesh(this.halfPrecisionCovariancesOnGPU, this.devicePixelRatio,
+                                       this.gpuAcceleratedSort, this.integerBasedSort);
 
         this.showMeshCursor = false;
         this.showControlPlane = false;
@@ -87,8 +109,6 @@ export class Viewer {
         this.sortWorkerIndexesToSort = null;
         this.sortWorkerSortedIndexes = null;
         this.sortWorkerPrecomputedDistances = null;
-
-        this.splatMesh = null;
 
         this.selfDrivenModeRunning = false;
         this.splatRenderingInitialized = false;
@@ -374,45 +394,43 @@ export class Viewer {
     }();
 
     /**
-     * Load a splat scene into the viewer.
+     * Add a splat scene to the viewer.
      * @param {string} path Path to splat scene to be loaded
      * @param {object} options {
      *
      *         splatAlphaRemovalThreshold: Ignore any splats with an alpha less than the specified
-     *                                     value (valid range: 0 - 255). Defaults to 1.
+     *                                     value (valid range: 0 - 255), defaults to 1
      *
      *         showLoadingSpinner:         Display a loading spinner while the scene is loading, defaults to true
      *
-     *         position (Array<number>):   Position of the scene, acts as an offset from its default position.
-     *                                     Defaults to [0, 0, 0]
+     *         position (Array<number>):   Position of the scene, acts as an offset from its default position, defaults to [0, 0, 0]
      *
-     *         rotation (Array<number>):   Rotation of the scene represented as a quaternion.
-     *                                     Defaults to [0, 0, 0, 1]
+     *         rotation (Array<number>):   Rotation of the scene represented as a quaternion, defaults to [0, 0, 0, 1]
      *
      *         scale (Array<number>):      Scene's scale, defaults to [1, 1, 1]
      *
      *         onProgress:                 Function to be called as file data are received
      *
      * }
-     * @return {Promise}
+     * @return {AbortablePromise}
      */
     loadFile(path, options = {}) {
         if (options.showLoadingSpinner !== false) options.showLoadingSpinner = true;
-        return new Promise((resolve, reject) => {
-            if (options.showLoadingSpinner) this.loadingSpinner.show();
-            const downloadProgress = (percent, percentLabel) => {
-                if (options.showLoadingSpinner) {
-                    if (percent == 100) {
-                        this.loadingSpinner.setMessage(`Download complete!`);
-                    } else {
-                        const suffix = percentLabel ? `: ${percentLabel}` : `...`;
-                        this.loadingSpinner.setMessage(`Downloading${suffix}`);
-                    }
+        if (options.showLoadingSpinner) this.loadingSpinner.show();
+        const downloadProgress = (percent, percentLabel) => {
+            if (options.showLoadingSpinner) {
+                if (percent == 100) {
+                    this.loadingSpinner.setMessage(`Download complete!`);
+                } else {
+                    const suffix = percentLabel ? `: ${percentLabel}` : `...`;
+                    this.loadingSpinner.setMessage(`Downloading${suffix}`);
                 }
-                if (options.onProgress) options.onProgress(percent, percentLabel, 'downloading');
-            };
-            this.loadFileToSplatBuffer(path, options.splatAlphaRemovalThreshold, downloadProgress)
-            .then((splatBuffer) => {
+            }
+            if (options.onProgress) options.onProgress(percent, percentLabel, 'downloading');
+        };
+        const loadPromise = this.loadFileToSplatBuffer(path, options.splatAlphaRemovalThreshold, downloadProgress);
+        return new AbortablePromise((resolve, reject) => {
+            loadPromise.then((splatBuffer) => {
                 if (options.showLoadingSpinner) this.loadingSpinner.hide();
                 if (options.onProgress) options.onProgress(0, '0%', 'processing');
                 const splatBufferOptions = {
@@ -421,119 +439,114 @@ export class Viewer {
                     'scale': options.scale,
                     'splatAlphaRemovalThreshold': options.splatAlphaRemovalThreshold,
                 };
-                this.loadSplatBuffersIntoMesh([splatBuffer], [splatBufferOptions], options.showLoadingSpinner).then(() => {
+                this.addSplatBuffers([splatBuffer], [splatBufferOptions], options.showLoadingSpinner).then(() => {
                     if (options.onProgress) options.onProgress(100, '100%', 'processing');
                     resolve();
                 });
             })
-            .catch((e) => {
+            .catch(() => {
+                if (options.showLoadingSpinner) this.loadingSpinner.hide();
                 reject(new Error(`Viewer::loadFile -> Could not load file ${path}`));
             });
-        });
+        }, loadPromise.abortHandler);
     }
 
     /**
-     * Load multiple splat scenes into the viewer.
-     * @param {Array<object>} files Array of per-file options: {
+     * Add multiple splat scenes to the viewer.
+     * @param {Array<object>} files Array of per-scene options: {
      *
      *         path: Path to splat scene to be loaded
      *
      *         splatAlphaRemovalThreshold: Ignore any splats with an alpha less than the specified
-     *                                     value (valid range: 0 - 255). Defaults to 1.
+     *                                     value (valid range: 0 - 255), defaults to 1
      *
-     *         position (Array<number>):   Position of the scene, acts as an offset from its default position.
-     *                                     Defaults to [0, 0, 0]
+     *         position (Array<number>):   Position of the scene, acts as an offset from its default position, defaults to [0, 0, 0]
      *
-     *         rotation (Array<number>):   Rotation of the scene represented as a quaternion.
-     *                                     Defaults to [0, 0, 0, 1]
+     *         rotation (Array<number>):   Rotation of the scene represented as a quaternion, defaults to [0, 0, 0, 1]
      *
      *         scale (Array<number>):      Scene's scale, defaults to [1, 1, 1]
      * }
      * @param {boolean} showLoadingSpinner Display a loading spinner while the scene is loading, defaults to true
      * @param {function} onProgress Function to be called as file data are received
-     * @return {Promise}
+     * @return {AbortablePromise}
      */
     loadFiles(files, showLoadingSpinner = true, onProgress = undefined) {
-        return new Promise((resolve, reject) => {
-            const fileCount = files.length;
-            const percentComplete = [];
-            if (showLoadingSpinner) this.loadingSpinner.show();
-            const downloadProgress = (fileIndex, percent, percentLabel) => {
-                percentComplete[fileIndex] = percent;
-                let totalPercent = 0;
-                for (let i = 0; i < fileCount; i++) totalPercent += percentComplete[i] || 0;
-                totalPercent = totalPercent / fileCount;
-                percentLabel = `${totalPercent.toFixed(2)}%`;
-                if (showLoadingSpinner) {
-                    if (totalPercent == 100) {
-                        this.loadingSpinner.setMessage(`Download complete!`);
-                    } else {
-                        this.loadingSpinner.setMessage(`Downloading: ${percentLabel}`);
-                    }
+        const fileCount = files.length;
+        const percentComplete = [];
+        if (showLoadingSpinner) this.loadingSpinner.show();
+        const downloadProgress = (fileIndex, percent, percentLabel) => {
+            percentComplete[fileIndex] = percent;
+            let totalPercent = 0;
+            for (let i = 0; i < fileCount; i++) totalPercent += percentComplete[i] || 0;
+            totalPercent = totalPercent / fileCount;
+            percentLabel = `${totalPercent.toFixed(2)}%`;
+            if (showLoadingSpinner) {
+                if (totalPercent == 100) {
+                    this.loadingSpinner.setMessage(`Download complete!`);
+                } else {
+                    this.loadingSpinner.setMessage(`Downloading: ${percentLabel}`);
                 }
-                if (onProgress) onProgress(totalPercent, percentLabel, 'downloading');
-            };
-
-            const downLoadPromises = [];
-            for (let i = 0; i < files.length; i++) {
-                const meshOptionsForFile = files[i] || {};
-                const downloadPromise = this.loadFileToSplatBuffer(files[i].path, meshOptionsForFile.splatAlphaRemovalThreshold,
-                                                                   downloadProgress.bind(this, i));
-                downLoadPromises.push(downloadPromise);
             }
+            if (onProgress) onProgress(totalPercent, percentLabel, 'downloading');
+        };
 
-            Promise.all(downLoadPromises)
+        const loadPromises = [];
+        const abortHandlers = [];
+        for (let i = 0; i < files.length; i++) {
+            const loadPromise = this.loadFileToSplatBuffer(files[i].path, files[i].splatAlphaRemovalThreshold,
+                                                           downloadProgress.bind(this, i));
+            abortHandlers.push(loadPromise.abortHandler);
+            loadPromises.push(loadPromise.promise);
+        }
+        const abortHandler = () => {
+            for (let abortHandler of abortHandlers) {
+                abortHandler();
+            }
+        };
+        return new AbortablePromise((resolve, reject) => {
+            Promise.all(loadPromises)
             .then((splatBuffers) => {
                 if (showLoadingSpinner) this.loadingSpinner.hide();
                 if (onProgress) options.onProgress(0, '0%', 'processing');
-                this.loadSplatBuffersIntoMesh(splatBuffers, files, showLoadingSpinner).then(() => {
+                this.addSplatBuffers(splatBuffers, files, showLoadingSpinner).then(() => {
                     if (onProgress) onProgress(100, '100%', 'processing');
                     resolve();
                 });
             })
-            .catch((e) => {
+            .catch(() => {
+                if (showLoadingSpinner) this.loadingSpinner.hide();
                 reject(new Error(`Viewer::loadFiles -> Could not load one or more files.`));
             });
-        });
+        }, abortHandler);
     }
 
     /**
      *
      * @param {string} path Path to splat scene to be loaded
      * @param {number} splatAlphaRemovalThreshold Ignore any splats with an alpha less than the specified
-     *                                            value (valid range: 0 - 255). Defaults to 1.
+     *                                            value (valid range: 0 - 255), defaults to 1
      *
      * @param {function} onProgress Function to be called as file data are received
-     * @return {Promise}
+     * @return {AbortablePromise}
      */
     loadFileToSplatBuffer(path, splatAlphaRemovalThreshold = 1, onProgress = undefined) {
         const downloadProgress = (percent, percentLabel) => {
             if (onProgress) onProgress(percent, percentLabel, 'downloading');
         };
-        return new Promise((resolve, reject) => {
-            let fileLoadPromise;
-            if (SplatLoader.isFileSplatFormat(path)) {
-                fileLoadPromise = new SplatLoader().loadFromURL(path, downloadProgress, 0, splatAlphaRemovalThreshold);
-            } else if (path.endsWith('.ply')) {
-                fileLoadPromise = new PlyLoader().loadFromURL(path, downloadProgress, 0, splatAlphaRemovalThreshold);
-            } else {
-                reject(new Error(`Viewer::loadFileToSplatBuffer -> File format not supported: ${path}`));
-            }
-            fileLoadPromise
-            .then((splatBuffer) => {
-                resolve(splatBuffer);
-            })
-            .catch(() => {
-                reject(new Error(`Viewer::loadFileToSplatBuffer -> Could not load file ${path}`));
-            });
-        });
+        if (SplatLoader.isFileSplatFormat(path)) {
+            return new SplatLoader().loadFromURL(path, downloadProgress, 0, splatAlphaRemovalThreshold);
+        } else if (path.endsWith('.ply')) {
+            return new PlyLoader().loadFromURL(path, downloadProgress, 0, splatAlphaRemovalThreshold);
+        } else {
+            return AbortablePromise.reject(new Error(`Viewer::loadFileToSplatBuffer -> File format not supported: ${path}`));
+        }
     }
 
     /**
-     * Load one or instances of SplatBuffer into the SplatMesh managed by the viewer and set up the sorting web worker.
+     * Add one or more instances of SplatBuffer to the SplatMesh instance managed by the viewer and set up the sorting web worker.
      * This function will terminate the existing sort worker (if there is one).
      */
-    loadSplatBuffersIntoMesh = function() {
+    addSplatBuffers = function() {
 
         let loadPromise;
         let loadCount = 0;
@@ -551,7 +564,7 @@ export class Viewer {
                         if (this.sortWorker) this.sortWorker.terminate();
                         this.sortWorker = null;
                         this.sortRunning = false;
-                        this.updateSplatMesh(splatBuffers, splatBufferOptions);
+                        this.addSplatBuffersToMesh(splatBuffers, splatBufferOptions);
                         this.setupSortWorker(this.splatMesh).then(() => {
                             loadCount--;
                             if (loadCount === 0) {
@@ -576,34 +589,28 @@ export class Viewer {
     }();
 
     /**
-     * Load one or instances of SplatBuffer into the SplatMesh managed by the viewer.
+     * Add one or more instances of SplatBuffer to the SplatMesh instance managed by the viewer. This function is additive; all splat
+     * buffers contained by the viewer's splat mesh before calling this function will be preserved.
      * @param {Array<SplatBuffer>} splatBuffers SplatBuffer instances
      * @param {Array<object>} splatBufferOptions Array of options objects: {
      *
      *         splatAlphaRemovalThreshold: Ignore any splats with an alpha less than the specified
-     *                                     value (valid range: 0 - 255). Defaults to 1.
+     *                                     value (valid range: 0 - 255), defaults to 1
      *
-     *         position (Array<number>):   Position of the scene, acts as an offset from its default position.
-     *                                     Defaults to [0, 0, 0]
+     *         position (Array<number>):   Position of the scene, acts as an offset from its default position, defaults to [0, 0, 0]
      *
-     *         rotation (Array<number>):   Rotation of the scene represented as a quaternion.
-     *                                     Defaults to [0, 0, 0, 1]
+     *         rotation (Array<number>):   Rotation of the scene represented as a quaternion, defaults to [0, 0, 0, 1]
      *
      *         scale (Array<number>):      Scene's scale, defaults to [1, 1, 1]
      * }
      */
-    updateSplatMesh(splatBuffers, splatBufferOptions) {
-        if (!this.splatMesh) {
-            this.splatMesh = new SplatMesh(this.halfPrecisionCovariancesOnGPU, this.devicePixelRatio, this.gpuAcceleratedSort);
-        }
+    addSplatBuffersToMesh(splatBuffers, splatBufferOptions) {
         const allSplatBuffers = this.splatMesh.splatBuffers || [];
         const allSplatBufferOptions = this.splatMesh.splatBufferOptions || [];
         allSplatBuffers.push(...splatBuffers);
         allSplatBufferOptions.push(...splatBufferOptions);
         this.splatMesh.build(allSplatBuffers, allSplatBufferOptions, true);
         if (this.renderer) this.splatMesh.setRenderer(this.renderer);
-        const splatCount = this.splatMesh.getSplatCount();
-        console.log(`Total splat count: ${splatCount}`);
         this.splatMesh.frustumCulled = false;
     }
 
@@ -614,30 +621,42 @@ export class Viewer {
      */
     setupSortWorker(splatMesh) {
         return new Promise((resolve) => {
+            const PrecomputedDistancesArrayType = this.integerBasedSort ? Int32Array : Float32Array;
             const splatCount = splatMesh.getSplatCount();
-            const sortWorker = createSortWorker(splatCount);
+            const sortWorker = createSortWorker(splatCount, this.sharedMemoryForWorkers, this.integerBasedSort);
             sortWorker.onmessage = (e) => {
                 if (e.data.sortDone) {
                     this.sortRunning = false;
-                    this.splatMesh.updateRenderIndexes(this.sortWorkerSortedIndexes, e.data.splatRenderCount);
+                    if (this.sharedMemoryForWorkers) {
+                        this.splatMesh.updateRenderIndexes(this.sortWorkerSortedIndexes, e.data.splatRenderCount);
+                    } else {
+                        const sortedIndexes = new Uint32Array(e.data.sortedIndexes, 0, e.data.splatRenderCount);
+                        this.splatMesh.updateRenderIndexes(sortedIndexes, e.data.splatRenderCount);
+                    }
                     this.lastSortTime = e.data.sortTime;
                 } else if (e.data.sortCanceled) {
                     this.sortRunning = false;
                 } else if (e.data.sortSetupPhase1Complete) {
                     console.log('Sorting web worker WASM setup complete.');
+                    const centers = this.integerBasedSort ? this.splatMesh.getIntegerCenters(true) : this.splatMesh.getFloatCenters(true);
                     sortWorker.postMessage({
-                        'centers': this.splatMesh.getIntegerCenters(true).buffer
+                        'centers': centers.buffer
                     });
-                    this.sortWorkerSortedIndexes = new Uint32Array(e.data.sortedIndexesBuffer,
-                                                                   e.data.sortedIndexesOffset, splatCount);
-                    this.sortWorkerIndexesToSort = new Uint32Array(e.data.indexesToSortBuffer,
-                                                                   e.data.indexesToSortOffset, splatCount);
-                    this.sortWorkerPrecomputedDistances = new Int32Array(e.data.precomputedDistancesBuffer,
-                                                                         e.data.precomputedDistancesOffset, splatCount);
+                    if (this.sharedMemoryForWorkers) {
+                        this.sortWorkerSortedIndexes = new Uint32Array(e.data.sortedIndexesBuffer,
+                                                                       e.data.sortedIndexesOffset, splatCount);
+                        this.sortWorkerIndexesToSort = new Uint32Array(e.data.indexesToSortBuffer,
+                                                                       e.data.indexesToSortOffset, splatCount);
+                        this.sortWorkerPrecomputedDistances = new PrecomputedDistancesArrayType(e.data.precomputedDistancesBuffer,
+                                                                                                e.data.precomputedDistancesOffset,
+                                                                                                splatCount);
+                    } else {
+                        this.sortWorkerIndexesToSort = new Uint32Array(splatCount);
+                        this.sortWorkerPrecomputedDistances = new PrecomputedDistancesArrayType(splatCount);
+                    }
                     for (let i = 0; i < splatCount; i++) this.sortWorkerIndexesToSort[i] = i;
                 } else if (e.data.sortSetupComplete) {
                     console.log('Sorting web worker ready.');
-                    this.splatMesh.updateRenderIndexes(this.sortWorkerSortedIndexes, splatCount);
                     const splatDataTextures = this.splatMesh.getSplatDataTextures();
                     const covariancesTextureSize = splatDataTextures.covariances.size;
                     const centersColorsTextureSize = splatDataTextures.centerColors.size;
@@ -992,15 +1011,24 @@ export class Viewer {
             cameraPositionArray[0] = this.camera.position.x;
             cameraPositionArray[1] = this.camera.position.y;
             cameraPositionArray[2] = this.camera.position.z;
-            this.sortWorker.postMessage({
-                sort: {
-                    'modelViewProj': SplatMesh.getIntegerMatrixArray(mvpMatrix),
-                    'cameraPosition': cameraPositionArray,
-                    'splatRenderCount': this.splatRenderCount,
-                    'splatSortCount': sortCount,
-                    'usePrecomputedDistances': this.gpuAcceleratedSort
+            const sortMVPMatrix = this.integerBasedSort ? SplatMesh.getIntegerMatrixArray(mvpMatrix) : mvpMatrix.elements;
+            const sortMessage = {
+                'modelViewProj': sortMVPMatrix,
+                'cameraPosition': cameraPositionArray,
+                'splatRenderCount': this.splatRenderCount,
+                'splatSortCount': sortCount,
+                'usePrecomputedDistances': this.gpuAcceleratedSort
+            };
+            if (!this.sharedMemoryForWorkers) {
+                sortMessage.indexesToSort = this.sortWorkerIndexesToSort;
+                if (this.gpuAcceleratedSort) {
+                    sortMessage.precomputedDistances = this.sortWorkerPrecomputedDistances;
                 }
+            }
+            this.sortWorker.postMessage({
+                'sort': sortMessage
             });
+
             if (queuedSorts.length === 0) {
                 lastSortViewPos.copy(this.camera.position);
                 lastSortViewDir.copy(sortViewDir);
