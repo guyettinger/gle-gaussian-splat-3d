@@ -19,11 +19,27 @@ export class DropInViewer extends THREE.Group {
         options.renderer = undefined;
 
         this.viewer = new Viewer(options);
+        this.splatMesh = null;
+        this.updateSplatMesh();
 
         this.callbackMesh = DropInViewer.createCallbackMesh();
         this.add(this.callbackMesh);
         this.callbackMesh.onBeforeRender = DropInViewer.onBeforeRender.bind(this, this.viewer);
 
+        this.viewer.onSplatMeshChanged(() => {
+            this.updateSplatMesh();
+        });
+
+    }
+
+    updateSplatMesh() {
+        if (this.splatMesh !== this.viewer.splatMesh) {
+            if (this.splatMesh) {
+                this.remove(this.splatMesh);
+            }
+            this.splatMesh = this.viewer.splatMesh;
+            this.add(this.viewer.splatMesh);
+        }
     }
 
     /**
@@ -34,7 +50,7 @@ export class DropInViewer extends THREE.Group {
      *         splatAlphaRemovalThreshold: Ignore any splats with an alpha less than the specified
      *                                     value (valid range: 0 - 255), defaults to 1
      *
-     *         showLoadingSpinner:         Display a loading spinner while the scene is loading, defaults to true
+     *         showLoadingUI:         Display a loading spinner while the scene is loading, defaults to true
      *
      *         position (Array<number>):   Position of the scene, acts as an offset from its default position, defaults to [0, 0, 0]
      *
@@ -47,18 +63,14 @@ export class DropInViewer extends THREE.Group {
      * }
      * @return {AbortablePromise}
      */
-    addSceneFromFile(path, options = {}) {
-        if (options.showLoadingSpinner !== false) options.showLoadingSpinner = true;
-        const loadPromise = this.viewer.loadFile(path, options);
-        loadPromise.then(() => {
-            this.add(this.viewer.splatMesh);
-        });
-        return loadPromise;
+    addSplatScene(path, options = {}) {
+        if (options.showLoadingUI !== false) options.showLoadingUI = true;
+        return this.viewer.addSplatScene(path, options);
     }
 
     /**
      * Add multiple splat scenes to the viewer.
-     * @param {Array<object>} files Array of per-scene options: {
+     * @param {Array<object>} sceneOptions Array of per-scene options: {
      *
      *         path: Path to splat scene to be loaded
      *
@@ -71,19 +83,36 @@ export class DropInViewer extends THREE.Group {
      *
      *         scale (Array<number>):      Scene's scale, defaults to [1, 1, 1]
      * }
-     * @param {boolean} showLoadingSpinner Display a loading spinner while the scene is loading, defaults to true
+     * @param {boolean} showLoadingUI Display a loading spinner while the scene is loading, defaults to true
      * @return {AbortablePromise}
      */
-    addScenesFromFiles(files, showLoadingSpinner) {
-        if (showLoadingSpinner !== false) showLoadingSpinner = true;
-        const loadPromise = this.viewer.loadFiles(files, showLoadingSpinner);
-        loadPromise.then(() => {
-            this.add(this.viewer.splatMesh);
-        });
-        return loadPromise;
+    addSplatScenes(sceneOptions, showLoadingUI) {
+        if (showLoadingUI !== false) showLoadingUI = true;
+        return this.viewer.addSplatScenes(sceneOptions, showLoadingUI);
     }
 
-    static onBeforeRender(viewer, renderer, scene, camera) {
+    /**
+     * Get a reference to a splat scene.
+     * @param {number} sceneIndex The index of the scene to which the reference will be returned
+     * @return {SplatScene}
+     */
+    getSplatScene(sceneIndex) {
+        return this.viewer.getSplatScene(sceneIndex);
+    }
+
+    removeSplatScene(index, showLoadingUI = true) {
+        return this.viewer.removeSplatScene(index, showLoadingUI);
+    }
+
+    removeSplatScenes(indexes, showLoadingUI = true) {
+        return this.viewer.removeSplatScenes(indexes, showLoadingUI);
+    }
+
+    dispose() {
+        return this.viewer.dispose();
+    }
+
+    static onBeforeRender(viewer, renderer, threeScene, camera) {
         viewer.update(renderer, camera);
     }
 

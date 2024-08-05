@@ -1,4 +1,4 @@
-import { AbortablePromise } from './AbortablePromise.js';
+import { AbortablePromise, AbortedPromiseError } from './AbortablePromise.js';
 
 export const floatToHalf = function() {
 
@@ -50,15 +50,19 @@ export const rgbaToInteger = function(r, g, b, a) {
     return r + (g << 8) + (b << 16) + (a << 24);
 };
 
-export const fetchWithProgress = function(path, onProgress) {
+export const rgbaArrayToInteger = function(arr, offset) {
+    return arr[offset] + (arr[offset + 1] << 8) + (arr[offset + 2] << 16) + (arr[offset + 3] << 24);
+};
+
+export const fetchWithProgress = function(path, onProgress, saveChunks = true) {
 
     const abortController = new AbortController();
     const signal = abortController.signal;
     let aborted = false;
     let rejectFunc = null;
-    const abortHandler = () => {
-        abortController.abort();
-        rejectFunc('Fetch aborted');
+    const abortHandler = (reason) => {
+        abortController.abort(reason);
+        rejectFunc(new AbortedPromiseError('Fetch aborted.'));
         aborted = true;
     };
 
@@ -78,10 +82,14 @@ export const fetchWithProgress = function(path, onProgress) {
                     const { value: chunk, done } = await reader.read();
                     if (done) {
                         if (onProgress) {
-                            onProgress(100, '100%', chunk);
+                            onProgress(100, '100%', chunk, fileSize);
                         }
-                        const buffer = new Blob(chunks).arrayBuffer();
-                        resolve(buffer);
+                        if (saveChunks) {
+                            const buffer = new Blob(chunks).arrayBuffer();
+                            resolve(buffer);
+                        } else {
+                            resolve();
+                        }
                         break;
                     }
                     bytesDownloaded += chunk.length;
@@ -91,9 +99,10 @@ export const fetchWithProgress = function(path, onProgress) {
                         percent = bytesDownloaded / fileSize * 100;
                         percentLabel = `${percent.toFixed(2)}%`;
                     }
-                    chunks.push(chunk);
+                    if (saveChunks) chunks.push(chunk);
                     if (onProgress) {
-                        onProgress(percent, percentLabel, chunk);
+                        const cancelSaveChucnks = onProgress(percent, percentLabel, chunk, fileSize);
+                        if (cancelSaveChucnks) saveChunks = false;
                     }
                 } catch (error) {
                     reject(error);
@@ -112,3 +121,99 @@ export const clamp = function(val, min, max) {
 export const getCurrentTime = function() {
     return performance.now() / 1000;
 };
+
+export const disposeAllMeshes = (object3D) => {
+    if (object3D.geometry) {
+        object3D.geometry.dispose();
+        object3D.geometry = null;
+    }
+    if (object3D.material) {
+        object3D.material.dispose();
+        object3D.material = null;
+    }
+    if (object3D.children) {
+        for (let child of object3D.children) {
+            disposeAllMeshes(child);
+        }
+    }
+};
+
+export const delayedExecute = (func, fast) => {
+    return new Promise((resolve) => {
+        window.setTimeout(() => {
+            resolve(func());
+        }, fast ? 1 : 50);
+    });
+};
+
+
+export const getSphericalHarmonicsComponentCountForDegree = (sphericalHarmonicsDegree = 0) => {
+    switch (sphericalHarmonicsDegree) {
+        case 1:
+            return 9;
+        case 2:
+            return 24;
+    }
+    return 0;
+};
+
+export const nativePromiseWithExtractedComponents = () => {
+    let resolver;
+    let rejecter;
+    const promise = new Promise((resolve, reject) => {
+        resolver = resolve;
+        rejecter = reject;
+    });
+    return {
+        'promise': promise,
+        'resolve': resolver,
+        'reject': rejecter
+    };
+};
+
+export const abortablePromiseWithExtractedComponents = (abortHandler) => {
+    let resolver;
+    let rejecter;
+    if (!abortHandler) {
+        abortHandler = () => {};
+    }
+    const promise = new AbortablePromise((resolve, reject) => {
+        resolver = resolve;
+        rejecter = reject;
+    }, abortHandler);
+    return {
+        'promise': promise,
+        'resolve': resolver,
+        'reject': rejecter
+    };
+};
+
+class Semver {
+    constructor(major, minor, patch) {
+        this.major = major;
+        this.minor = minor;
+        this.patch = patch;
+    }
+
+    toString() {
+        return `${this.major}_${this.minor}_${this.patch}`;
+    }
+}
+
+export function isIOS() {
+    const ua = navigator.userAgent;
+    return ua.indexOf('iPhone') > 0 || ua.indexOf('iPad') > 0;
+}
+
+export function getIOSSemever() {
+    if (isIOS()) {
+        const extract = navigator.userAgent.match(/OS (\d+)_(\d+)_?(\d+)?/);
+        return new Semver(
+            parseInt(extract[1] || 0, 10),
+            parseInt(extract[2] || 0, 10),
+            parseInt(extract[3] || 0, 10)
+        );
+    } else {
+        return null; // or [0,0,0]
+    }
+}

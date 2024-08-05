@@ -1,3 +1,17 @@
+/*
+Copyright © 2010-2024 three.js authors & Mark Kellogg
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+*/
+
 import {
     EventDispatcher,
     MOUSE,
@@ -151,6 +165,8 @@ class OrbitControls extends EventDispatcher {
             scope.target.copy( scope.target0 );
             scope.object.position.copy( scope.position0 );
             scope.object.zoom = scope.zoom0;
+            this.clearDampedRotation();
+            this.clearDampedPan();
 
             scope.object.updateProjectionMatrix();
             scope.dispatchEvent( _changeEvent );
@@ -159,6 +175,15 @@ class OrbitControls extends EventDispatcher {
 
             state = STATE.NONE;
 
+        };
+
+        this.clearDampedRotation = function() {
+            sphericalDelta.theta = 0.0;
+            sphericalDelta.phi = 0.0;
+        };
+
+        this.clearDampedPan = function() {
+            panOffset.set(0, 0, 0);
         };
 
         // this method is exposed, but perhaps it would be better if we can make it private...

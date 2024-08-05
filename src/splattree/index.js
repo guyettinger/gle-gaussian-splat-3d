@@ -1,5 +1,4 @@
-import { SplatTree } from './SplatTree.js';
-import { SplatTreeNode } from './SplatTreeNode.js';
+import { SplatTree, SplatTreeNode } from './SplatTree.js';
 
 export {
     SplatTree,

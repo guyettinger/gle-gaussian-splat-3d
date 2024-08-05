@@ -60,6 +60,7 @@
       font-size: 12pt;
       font-weight: bold;
       color: #333333;
+      margin-bottom: 5px;
     }
 
     .content-row {
@@ -81,12 +82,12 @@
       border-radius: 7px;
       border: #bbbbbb 1px solid;
       background-color: #f1f1f1;
-      width: 310px;
+      width: 220px;
       margin-left: 8px;
       margin-right: 8px;
     }
 
-    .demo-scene-panel:hover {
+    .demo-scene-panel.clickable:hover {
       color: #333333;
       border-color: #8a9ba8;
       background-color: #e4edfc;
@@ -97,6 +98,30 @@
       width: 95%;
       border-radius: 5px;
       margin-bottom: 10px;
+      width: 209px;
+      height: 149px;
+    }
+
+    .demo-scene-button-row {
+      display: flex;
+      flex-direction: row;
+      width: 100%;
+      justify-content: center;
+    }
+
+    .demo-scene-button {
+      border-radius: 5px;
+      border: #cccccc 2px solid;
+      background-color: #eeeeee;
+      color: #666666;
+      padding: 3px 7px 3px 7px;
+    }
+
+    .demo-scene-button:hover {
+      color: #333333;
+      border: #aaaaaa 2px solid;
+      background-color: #e7eaf1;
+      cursor: pointer;
     }
 
     .button {
@@ -116,10 +141,17 @@
     }
 
     .text-input {
-      border: #aaaaaa 1px solid;
+      border: hsl(0, 0%, 67%) 1px solid;
       background-color: #ffffff;
       padding: 4px;
       border-radius: 3px;
+    }
+
+    .checkbox-input {
+      width: 17px;
+      height: 17px;
+      padding: 0px;
+      margin: 0;
     }
 
     .splat-panel {
@@ -191,6 +223,11 @@
         margin-right: 3px;
     }
 
+    .valid-value-label {
+      color:#888888;
+      font-size: 10pt;
+    }
+
     @keyframes ply-load {
         to{transform: rotate(1turn)}
     }
@@ -203,6 +240,11 @@
 
         .splat-panel {
             width: 340px;
+        }
+
+        .demo-scene-panel-image {
+          width: 95%;
+          height: 95%;
         }
 
     }
@@ -221,6 +263,11 @@
           min-width: 330px;
         }
 
+        .demo-scene-panel-image {
+          width: 95%;
+          height: 95%;
+        }
+
     }
 
   </style>
@@ -237,42 +284,29 @@
     let currentCameraUpArray;
     let currentCameraPositionArray;
     let currentCameraLookAtArray;
+    let currentAntialiased;
+    let current2DScene;
+    let currentSphericalHarmonicsDegree;
   </script>
   <script type="module">
     import * as GaussianSplats3D from 'gaussian-splats-3d';
+    import * as THREE from 'three';
 
-    function convertPLYToSplatBuffer(plyBuffer, compressionLevel, alphaRemovalThreshold, blockSize, bucketSize) {
-      const plyParser = new GaussianSplats3D.PlyParser(plyBuffer);
-      return plyParser.parseToSplatBuffer(compressionLevel, alphaRemovalThreshold, blockSize, bucketSize);
-    }
-
-    function convertStandardSplatToSplatBuffer(bufferData, compressionLevel, alphaRemovalThreshold, blockSize, bucketSize){
-      const splatArray = GaussianSplats3D.SplatLoader.parseStandardSplatToUncompressedSplatArray(bufferData);
-      const splatCompressor = new GaussianSplats3D.SplatCompressor(compressionLevel, alphaRemovalThreshold, blockSize, bucketSize);
-      return splatCompressor.uncompressedSplatArrayToSplatBuffer(splatArray);
-    }
-
-    function isPlyFile(fileName) {
-      return fileName.toLowerCase().trim().endsWith('.ply');
-    }
-
-    function fileBufferToSplatBuffer(fileBufferData, isPly, isStandardSplat, compressionLevel, alphaRemovalThreshold, blockSize, bucketSize) {
-      let splatBuffer;
-      if (isPly) {
-        splatBuffer = convertPLYToSplatBuffer(fileBufferData, compressionLevel, alphaRemovalThreshold, blockSize, bucketSize);
+    function fileBufferToSplatBuffer(fileBufferData, format, alphaRemovalThreshold, compressionLevel, sectionSize, sceneCenter, blockSize, bucketSize, outSphericalHarmonicsDegree = 0) {
+      if (format === GaussianSplats3D.SceneFormat.Ply) {
+        return GaussianSplats3D.PlyLoader.loadFromFileData(fileBufferData.data, alphaRemovalThreshold, compressionLevel, outSphericalHarmonicsDegree, sectionSize, sceneCenter, blockSize, bucketSize);
       } else {
-        if (isStandardSplat) {
-          splatBuffer = convertStandardSplatToSplatBuffer(fileBufferData, compressionLevel, alphaRemovalThreshold, blockSize, bucketSize);
+        if (format === GaussianSplats3D.SceneFormat.Splat) {
+          return GaussianSplats3D.SplatLoader.loadFromFileData(fileBufferData.data, alphaRemovalThreshold, compressionLevel, sectionSize, sceneCenter, blockSize, bucketSize);
         } else {
-          splatBuffer = new GaussianSplats3D.SplatBuffer(fileBufferData);
+          return GaussianSplats3D.KSplatLoader.loadFromFileData(fileBufferData.data);
         }
       }
-      return splatBuffer;
     }
 
     window.onCompressionLevelChange = function(arg) {
       const compressionLevel = parseInt(document.getElementById("compressionLevel").value);
-      if (isNaN(compressionLevel) || compressionLevel < 0 || compressionLevel > 1) {
+      if (isNaN(compressionLevel) || compressionLevel < 0 || compressionLevel > 2) {
         return;
       }
 
@@ -301,14 +335,38 @@
       const conversionFile = document.getElementById("conversionFile");
       const compressionLevel = parseInt(document.getElementById("compressionLevel").value);
       const alphaRemovalThreshold = parseInt(document.getElementById("alphaRemovalThreshold").value);
+      const sphericalHarmonicsDegree = parseInt(document.getElementById("conversionSphericalHarmonicsDegree").value);
+      const sectionSize = 0;
+      let sceneCenterArray = document.getElementById("sceneCenter").value;
       const blockSize = parseFloat(document.getElementById("blockSize").value);
       const bucketSize = parseInt(document.getElementById("bucketSize").value);
 
-      if (isNaN(compressionLevel) || compressionLevel < 0 || compressionLevel > 1) {
+      sceneCenterArray = sceneCenterArray.split(',');
+  
+      if (sceneCenterArray.length !== 3) {
+        setViewError("Scene center must contain 3 elements.");
+        return;
+      }
+
+      for (let i = 0; i < 3; i++) {
+        sceneCenterArray[i] = parseFloat(sceneCenterArray[i]);
+
+        if (isNaN(sceneCenterArray[i])) {
+          setViewError("Invalid scene center.");
+          return;
+        }
+      }
+  
+      const sceneCenter = new THREE.Vector3().fromArray(sceneCenterArray);
+
+      if (isNaN(compressionLevel) || compressionLevel < 0 || compressionLevel > 2) {
         setConversionError("Invalid compression level.");
         return;
       } else if (isNaN(alphaRemovalThreshold) || alphaRemovalThreshold <0 || alphaRemovalThreshold > 255) {
         setConversionError("Invalid alpha remval threshold.");
+        return;
+      } else if (isNaN(sphericalHarmonicsDegree) || sphericalHarmonicsDegree < 0 || sphericalHarmonicsDegree > 2) {
+        setConversionError("Invalid SH degree.");
         return;
       } else if (isNaN(blockSize) || blockSize < 0.1) {
         setConversionError("Invalid block size.");
@@ -344,15 +402,17 @@
           setConversionStatus("Parsing file...");
           setConversionLoadingIconVisibility(true);
           setConversionCheckIconVisibility(false);
-          const conversionFileName = conversionFile.files[0].name;
-          const isPly = isPlyFile(conversionFileName);
-          const isStandardSplat = GaussianSplats3D.SplatLoader.isStandardSplatFormat(conversionFileName);
+          const conversionFileName = conversionFile.files[0].name.trim();
+          const format = GaussianSplats3D.LoaderUtils.sceneFormatFromPath(conversionFileName);
+          const fileData = {data: fileReader.result};
           window.setTimeout(() => {
             try {
-              const splatBuffer = fileBufferToSplatBuffer(fileReader.result, isPly, isStandardSplat, compressionLevel,
-                                                          alphaRemovalThreshold, blockSize, bucketSize);
-              new GaussianSplats3D.SplatLoader(splatBuffer).downloadFile('converted_file.ksplat');
-              conversionDone();
+              const splatBufferPromise = fileBufferToSplatBuffer(fileData, format, alphaRemovalThreshold, compressionLevel,
+                                                                 sectionSize, sceneCenter, blockSize, bucketSize, sphericalHarmonicsDegree);
+              splatBufferPromise.then((splatBuffer) => {
+                GaussianSplats3D.KSplatLoader.downloadFile(splatBuffer, 'converted_file.ksplat');
+                conversionDone();
+              });
             } catch (e) {
               conversionDone(e);
             }
@@ -395,6 +455,9 @@
       let cameraUpArray = document.getElementById("cameraUp").value;
       let cameraPositionArray = document.getElementById("cameraPosition").value;
       let cameraLookAtArray = document.getElementById("cameraLookAt").value;
+      let antialiased = document.getElementById("antialiased").checked;
+      let sceneIs2D = document.getElementById("2dScene").checked;
+      let sphericalHarmonicsDegree = parseInt(document.getElementById("viewSphericalHarmonicsDegree").value);
 
       cameraUpArray = cameraUpArray.split(',');
       cameraPositionArray = cameraPositionArray.split(',');
@@ -405,6 +468,9 @@
         return;
       } else if (isNaN(alphaRemovalThreshold) || alphaRemovalThreshold < 0 || alphaRemovalThreshold > 255) {
         setViewError("Invalid alpha remval threshold.");
+        return;
+      } else if (isNaN(sphericalHarmonicsDegree) || sphericalHarmonicsDegree < 0 || sphericalHarmonicsDegree > 2) {
+        setViewError("Invalid SH degree.");
         return;
       }
 
@@ -444,20 +510,24 @@
         }
       }
 
-      const viewFileName = viewFile.files[0].name;
-      const isPly = isPlyFile(viewFileName);
-      const isStandardSplat = GaussianSplats3D.SplatLoader.isStandardSplatFormat(viewFileName);
+      const viewFileName = viewFile.files[0].name.trim();
+      const format = GaussianSplats3D.LoaderUtils.sceneFormatFromPath(viewFileName);
 
       currentAlphaRemovalThreshold = alphaRemovalThreshold;
       currentCameraUpArray = cameraUpArray;
       currentCameraPositionArray = cameraPositionArray;
       currentCameraLookAtArray = cameraLookAtArray;
+      currentAntialiased = antialiased;
+      current2DScene = sceneIs2D;
+      currentSphericalHarmonicsDegree = sphericalHarmonicsDegree;
+
       try {
         const fileReader = new FileReader();
         fileReader.onload = function(){
           try {
-           runViewer(fileReader.result, isPly, isStandardSplat, alphaRemovalThreshold, cameraUpArray, cameraPositionArray, cameraLookAtArray);
+           runViewer(fileReader.result, format, alphaRemovalThreshold, cameraUpArray, cameraPositionArray, cameraLookAtArray, antialiased, sceneIs2D, sphericalHarmonicsDegree);
           } catch (e) {
+            console.error(e);
             setViewError("Could not view scene.");
           }
         }
@@ -487,38 +557,52 @@
   
     window.addEventListener("popstate", (event) => {
       if (currentAlphaRemovalThreshold !== undefined) {
-        window.location = 'index.html?art=' + currentAlphaRemovalThreshold + '&cu=' + currentCameraUpArray + "&cp=" + currentCameraPositionArray + "&cla=" + currentCameraLookAtArray;
+        window.location = 'index.html?art=' + currentAlphaRemovalThreshold + '&cu=' + currentCameraUpArray + "&cp=" + currentCameraPositionArray + "&cla=" + currentCameraLookAtArray + "&aa=" + currentAntialiased + "&2d=" + current2DScene + "&sh=" + currentSphericalHarmonicsDegree;
       } else {
         window.location = 'index.html';
       }
     });
 
-    function runViewer(splatBufferData, isPly, isStandardSplat, alphaRemovalThreshold, cameraUpArray, cameraPositionArray, cameraLookAtArray) {
+    function runViewer(splatBufferData, format, alphaRemovalThreshold, cameraUpArray, cameraPositionArray, cameraLookAtArray, antialiased, sceneIs2D, sphericalHarmonicsDegree) {
       const viewerOptions = {
         'cameraUp': cameraUpArray,
         'initialCameraPosition': cameraPositionArray,
         'initialCameraLookAt': cameraLookAtArray,
-        'halfPrecisionCovariancesOnGPU': true,
+        'halfPrecisionCovariancesOnGPU': false,
+        'antialiased': antialiased || false,
+        'splatRenderMode': sceneIs2D ? GaussianSplats3D.SplatRenderMode.TwoD : GaussianSplats3D.SplatRenderMode.ThreeD,
+        'sphericalHarmonicsDegree': sphericalHarmonicsDegree
       };
       const splatBufferOptions = {
         'splatAlphaRemovalThreshold': alphaRemovalThreshold
       };
-
-      const splatBuffer = fileBufferToSplatBuffer(splatBufferData, isPly, isStandardSplat, 0, alphaRemovalThreshold);
-      document.getElementById("demo-content").style.display = 'none';
-      document.body.style.backgroundColor = "#000000";
-      history.pushState("ViewSplat", null);
-      const viewer = new GaussianSplats3D.Viewer(viewerOptions);
-      viewer.addSplatBuffers([splatBuffer], [splatBufferOptions])
-      .then(() => {
-          viewer.start();
+      const splatBufferPromise = fileBufferToSplatBuffer({data: splatBufferData}, format, alphaRemovalThreshold, 0,
+                                                          undefined, undefined, undefined, undefined, sphericalHarmonicsDegree);
+      splatBufferPromise.then((splatBuffer) => {
+        document.getElementById("demo-content").style.display = 'none';
+        document.body.style.backgroundColor = "#000000";
+        history.pushState("ViewSplat", null);
+        const viewer = new GaussianSplats3D.Viewer(viewerOptions);
+        viewer.addSplatBuffers([splatBuffer], [splatBufferOptions])
+        .then(() => {
+            viewer.start();
+        });
       });
     }
 
   </script>
   <script>
-    function openDemo(demoName) {
-      window.location = demoName + '.html';
+    function openDemo(page, params) {
+      let url = page + '.html';
+      if (params && params.length > 0) {
+        let index = 0;
+        for (let param of params) {
+          url += (index === 0 ? "?" : "&");
+          url += param[0] + "=" + param[1];
+          index++;
+        }
+      }
+      window.location = url;
     }
     function reset() {
       window.location = 'index.html';
@@ -549,25 +633,65 @@
             Demo scenes
           </div>
         </div>
-        <div class="content-row">
-            <div class="demo-scene-panel" onclick="openDemo('garden')">
+        <div style="text-align:center;">
+          <div class="content-row" style="max-width: 800px; margin:auto; display:flex; align-items: center; justify-content: center;">
+            <div class="demo-scene-panel">
+                <div class="small-title">Garden</div>
                 <img src="assets/images/garden.png" class="demo-scene-panel-image">
-                <span class="small-title">Garden</span>
+                <div class="demo-scene-button-row">
+                  <div class="demo-scene-button" onclick="openDemo('garden', [['mode', '0']])">Low</div>
+                  <div style="width: 10px;"></div>
+                  <div class="demo-scene-button" onclick="openDemo('garden', [['mode', '1']])">High</div>
+                </div>
             </div>
-            <div class="demo-scene-panel" onclick="openDemo('truck')">
+            <div class="demo-scene-panel">
+                <div class="small-title">Truck</div>
                 <img src="assets/images/truck.png" class="demo-scene-panel-image">
-                <span class="small-title">Truck</span>
+                <div class="demo-scene-button-row">
+                  <div class="demo-scene-button" onclick="openDemo('truck', [['mode', '0']])">Low</div>
+                  <div style="width: 10px;"></div>
+                  <div class="demo-scene-button" onclick="openDemo('truck', [['mode', '1']])">High</div>
+                </div>
             </div>
-            <div class="demo-scene-panel" onclick="openDemo('stump')">
-                <img src="assets/images/stump.png" class="demo-scene-panel-image">
-                <span class="small-title">Stump</span>
+            <div class="demo-scene-panel">
+              <div class="small-title">Stump</div>
+              <img src="assets/images/stump.png" class="demo-scene-panel-image">
+              <div class="demo-scene-button-row">
+                <div class="demo-scene-button" onclick="openDemo('stump', [['mode', '0']])">Low</div>
+                <div style="width: 10px;"></div>
+                <div class="demo-scene-button" onclick="openDemo('stump', [['mode', '1']])">High</div>
+              </div>
             </div>
+            <div class="demo-scene-panel">
+              <div class="small-title">Bonsai</div>
+              <img src="assets/images/bonsai.png" class="demo-scene-panel-image">
+              <div class="demo-scene-button-row">
+                <div class="demo-scene-button" onclick="openDemo('bonsai', [['mode', '0']])">Low</div>
+                <div style="width: 10px;"></div>
+                <div class="demo-scene-button" onclick="openDemo('bonsai', [['mode', '1']])">High</div>
+              </div>
+            </div>
+            <div class="demo-scene-panel">
+              <div class="small-title">Dynamic scenes</div>
+              <img src="assets/images/dynamic_scenes.png" class="demo-scene-panel-image">
+              <div class="demo-scene-button-row">
+                <div class="demo-scene-button" onclick="openDemo('dynamic_scenes', [['mode', '0']])">Open</div>
+              </div>
+            </div>
+            <div class="demo-scene-panel">
+              <div class="small-title">AR/VR</div>
+              <img src="assets/images/bonsai.png" class="demo-scene-panel-image">
+              <div class="demo-scene-button-row">
+                <div class="demo-scene-button" onclick="openDemo('vr', [['mode', '0']])">Open</div>
+              </div>
+            </div>
+          </div>
         </div>
     </div>
     <br>
     <div class="header-content-container">
         <div class="content-row">
-            <div id ="view-panel" class="splat-panel" style="height:300px;">
+            <div id ="view-panel" class="splat-panel" style="height:400px;">
                 <br>
                 <div class="small-title">View a <span class="file-ext">.ply</span>, <span class="file-ext">.ksplat</span>, or <span class="file-ext-small">.splat</span> file</div>
                 <br>
@@ -584,14 +708,29 @@
                     <tr>
                     <td colspan="2" style="height: 10px;"></td>
                     </tr>
-                    <tr>
                     <td>
                         Minimum alpha:&nbsp;
                     </td>
                     <td>
                         <input id="alphaRemovalThresholdView" type="text" class="text-input" style="width: 50px" value="1"></input>
-                        <span style="color:#888888">(1 - 255)</span>
+                        <span class="valid-value-label">(1 - 255)</span>
                     </td>
+                    </tr>
+                    <tr>
+                      <td>
+                        Anti-aliased
+                      </td>
+                      <td style="text-align:left;">
+                        <input type="checkbox" id="antialiased" class="checkbox-input"/>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td>
+                        2D scene
+                      </td>
+                      <td style="text-align:left;">
+                        <input type="checkbox" id="2dScene" class="checkbox-input"/>
+                      </td>
                     </tr>
                     <tr>
                     <td>
@@ -617,6 +756,15 @@
                         <input id="cameraLookAt" type="text" class="text-input" style="width: 90px" value="1, 0, 0"></input>
                     </td>
                     </tr>
+                    <tr>
+                      <td>
+                          SH level:
+                      </td>
+                      <td>
+                          <input id="viewSphericalHarmonicsDegree" type="text" class="text-input" style="width: 50px" value="0"></input>
+                          <span class="valid-value-label">(0, 1, or 2)</span>
+                      </td>
+                      </tr>
                 </table>
                 <br>
                 <span class="button" onclick="window.viewSplat()">View</span>
@@ -634,7 +782,7 @@
                 <span id="viewError" style="color: #ff0000"></span>
             </div>
       
-            <div id ="conversion-panel" class="splat-panel" style="height:360px;">
+            <div id ="conversion-panel" class="splat-panel" style="height:420px;">
                 <br>
                 <span class="small-title">Convert a <span class="file-ext">.ply</span> or <span class="file-ext">.splat</span> to <span class="file-ext">.ksplat</span></span>
                 <br>
@@ -658,16 +806,33 @@
                       </td>
                       <td>
                           <input id="alphaRemovalThreshold" type="text" class="text-input" style="width: 50px" value="1"></input>
-                          <span style="color:#888888">(1 - 255)</span>
+                          <span class="valid-value-label">(1 - 255)</span>
                       </td>
-                      </tr>
+                    </tr>
+                    <tr>
+                      <td>
+                          Scene center:&nbsp;
+                      </td>
+                      <td>
+                          <input id="sceneCenter" type="text" class="text-input" style="width: 50px" value="0, 0, 0"></input>
+                      </td>
+                    </tr>
                     <tr>
                     <td>
                         Compression level:
                     </td>
                     <td>
                         <input id="compressionLevel" type="text" class="text-input" style="width: 50px" value="1" onChange="window.onCompressionLevelChange(this);"></input>
-                        <span style="color:#888888">(0 or 1)</span>
+                        <span class="valid-value-label">(0, 1, or 2)</span>
+                    </td>
+                    </tr>
+                    <tr>
+                    <td>
+                        SH level:
+                    </td>
+                    <td>
+                        <input id="conversionSphericalHarmonicsDegree" type="text" class="text-input" style="width: 50px" value="0"></input>
+                        <span class="valid-value-label">(0, 1, or 2)</span>
                     </td>
                     </tr>
                     <tr id="advancedCompressionRow1">
@@ -681,7 +846,7 @@
                       </td>
                       <td>
                         <input id="blockSize" type="text" class="text-input" style="width: 50px" value="5.0"></input>
-                        <span style="color:#888888">( >= 0.1 )</span>
+                        <span class="valid-value-label">( >= 0.1 )</span>
                       </td>
                     </tr>
                     <tr id="advancedCompressionRow3">
@@ -690,7 +855,7 @@
                       </td>
                       <td>
                           <input id="bucketSize" type="text" class="text-input" style="width: 50px" value="256"></input>
-                          <span style="color:#888888">(2 - 65536)</span>
+                          <span class="valid-value-label">(2 - 65536)</span>
                       </td>
                     </tr>
                 </table>
@@ -717,7 +882,7 @@
                 <span id="conversionError" style="color: #ff0000"></span>
             </div>
 
-            <div id ="controls-panel" class="splat-panel" style="height:360px;">
+            <div id ="controls-panel" class="splat-panel" style="height:490px;">
 
                 <br>
                 <span class="small-title">Mouse input</span>
@@ -748,7 +913,7 @@
                         </td>
                     </tr>
                     <tr>
-                        <td><div class ="controls-key">P</div></td>
+                        <td><div class ="controls-key">U</div></td>
                         <td class="controls-key-description">Toggle controls orientation marker</td>
                     </tr>
                     <tr>
@@ -766,6 +931,38 @@
                     <tr>
                         <td><div class ="controls-key" style="font-size:13pt; font-weight: bold;">&rarr;</div></td>
                         <td class="controls-key-description">Rotate camera-up clockwise</td>
+                    </tr>
+                    <tr>
+                      <td colspan="2" style="height:1px">
+                      </td>
+                    </tr>
+                    <tr>
+                        <td><div class ="controls-key">P</div></td>
+                        <td class="controls-key-description">Toggle point-cloud mode</td>
+                    </tr>
+                    <tr>
+                      <td colspan="2" style="height:1px">
+                      </td>
+                    </tr>
+                    <tr>
+                        <td><div class ="controls-key">O</div></td>
+                        <td class="controls-key-description">Toggle orthographic mode</td>
+                    </tr>
+                    <tr>
+                      <td colspan="2" style="height:1px">
+                      </td>
+                    </tr>
+                    <tr>
+                        <td><div class ="controls-key">=</div></td>
+                        <td class="controls-key-description">Increase splat scale</td>
+                    </tr>
+                    <tr>
+                      <td colspan="2" style="height:1px">
+                      </td>
+                    </tr>
+                    <tr>
+                        <td><div class ="controls-key">-</div></td>
+                        <td class="controls-key-description">Decrease splat scale</td>
                     </tr>
                 </table>
             </div>
@@ -793,6 +990,15 @@
         } else if (varName == "cla") {
           currentCameraLookAtArray = component[1];
           document.getElementById('cameraLookAt').value = currentCameraLookAtArray;
+        } else if (varName == "aa") {
+          currentAntialiased = component[1] === 'true' ? true : false;
+          document.getElementById('antialiased').checked = currentAntialiased;
+        } else if (varName == "2d") {
+          current2DScene = component[1] === 'true' ? true : false;
+          document.getElementById('2dScene').checked = current2DScene;
+        }  else if (varName == "sh") {
+          currentSphericalHarmonicsDegree = component[1];
+          document.getElementById('viewSphericalHarmonicsDegree').value = currentSphericalHarmonicsDegree;
         }
       }
     }

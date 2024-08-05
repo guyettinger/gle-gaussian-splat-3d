@@ -9,14 +9,19 @@
  */
 export class AbortablePromise {
 
+    static idGen = 0;
+
     constructor(promiseFunc, abortHandler) {
 
-        let promiseResolve;
-        let promiseReject;
+        let resolver;
+        let rejecter;
         this.promise = new Promise((resolve, reject) => {
-            promiseResolve = resolve.bind(this);
-            promiseReject = reject.bind(this);
+            resolver = resolve;
+            rejecter = reject;
         });
+
+        const promiseResolve = resolver.bind(this);
+        const promiseReject = rejecter.bind(this);
 
         const resolve = (...args) => {
             promiseResolve(...args);
@@ -28,6 +33,7 @@ export class AbortablePromise {
 
         promiseFunc(resolve.bind(this), reject.bind(this));
         this.abortHandler = abortHandler;
+        this.id = AbortablePromise.idGen++;
     }
 
     then(onResolve) {
@@ -62,15 +68,12 @@ export class AbortablePromise {
         if (this.abortHandler) this.abortHandler();
     }
 
-    static resolve(data) {
-        return new AbortablePromise((resolve) => {
-            resolve(data);
-        });
+}
+
+export class AbortedPromiseError extends Error {
+
+    constructor(msg) {
+        super(msg);
     }
 
-    static reject(error) {
-        return new AbortablePromise((resolve, reject) => {
-            reject(error);
-        });
-    }
 }
