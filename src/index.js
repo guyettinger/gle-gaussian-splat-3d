@@ -20,6 +20,7 @@ import { RenderMode } from './RenderMode.js';
 import { LogLevel } from './LogLevel.js';
 import { SceneRevealMode } from './SceneRevealMode.js';
 import { SplatRenderMode } from './SplatRenderMode.js';
+import { SplatMesh } from "./splatmesh/SplatMesh.js";
 
 export {
     Hit,
@@ -37,6 +38,7 @@ export {
     SplatParser,
     SplatPartitioner,
     SplatBufferGenerator,
+    SplatMesh,
     Viewer,
     DropInViewer,
     OrbitControls,

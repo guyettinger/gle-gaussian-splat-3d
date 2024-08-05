@@ -4,7 +4,7 @@
     "type": "git",
     "url": "https://github.com/guyettinger/gle-gaussian-splat-3d"
   },
-  "version": "1.0.18",
+  "version": "1.0.19",
   "description": "Three.js-based 3D Gaussian splat viewer",
   "contributors": [
     "Mark Kellogg",
@@ -68,7 +68,7 @@
     "prettier-eslint": "15.0.1",
     "rollup": "^4.3.0",
     "rollup-plugin-dts": "^6.1.0",
-    "three": "^0.157.0",
+    "three": "^0.167.1",
     "url-loader": "4.1.1"
   },
   "peerDependencies": {
