@@ -22,6 +22,7 @@ npm run build          # build library + demo into build/ (macOS/Linux)
 npm run build-windows  # same, on Windows
 npm run demo           # serve build/demo at http://127.0.0.1:8080
 npm run watch          # rebuild on changes to src/ and demo/
+npm run screenshots    # recapture README screenshots from the demo scenes (needs a display)
 npm run lint           # eslint over src/ (exits 0 even on errors)
 npm run fix-js         # eslint --fix over src/
 npm run prettify       # prettier --write over src/**/*.js
@@ -43,7 +44,7 @@ in a browser. Demo scene data is not in the repository — see
 | `src/splattree/` | Octree used to cull splats before sorting |
 | `src/worker/` | Sort web worker plus the C++ sorter and its compiled `.wasm` binaries |
 | `src/ui/`, `src/webxr/`, `src/raycaster/`, `src/three-shim/` | Loading UI, XR entry buttons, ray-splat intersection, Three.js version shims |
-| `util/` | `create-ksplat.js` converter, `server.js` demo server, `import-base-64.js` Rollup plugin |
+| `util/` | `create-ksplat.js` converter, `server.js` demo server, `import-base-64.js` Rollup plugin, `capture-screenshots.js` README screenshot capture |
 | `demo/` | Demo pages, copied into `build/demo` at build time |
 | `docs/` | Human documentation linked from the README |
 | `build/` | Generated. Gitignored. Never edit or commit. |
@@ -75,6 +76,9 @@ in a browser. Demo scene data is not in the repository — see
 - **Loader methods return `AbortablePromise`, not `Promise`.** Its `then()` takes only a resolve
   handler, so `await` on one will never settle if the operation fails. Use `.then()`/`.catch()`
   in examples and docs.
+- **`npm run screenshots` runs a headed browser.** It needs the built demo and the demo scene
+  data, and it will not produce usable output under headless software rendering. Don't run it as
+  a verification step; it's for refreshing the README images on purpose.
 - **`src/OrbitControls.js` is adapted from Three.js.** Prefer minimal, well-marked changes there.
 - **This is a fork.** Changes to `package.json` and `rollup.config.js` diverge from upstream on
   purpose (package name, types output). Preserve that divergence when merging upstream.

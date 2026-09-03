@@ -57,6 +57,27 @@ npm run watch
 Rebuilds the library when `src/**/*.js` changes and re-copies the demo when `demo/**/*.*`
 changes. Run `npm run demo` in a second terminal alongside it.
 
+## Screenshots
+
+The images in the README are captured from the demo scenes:
+
+```shell
+npm run screenshots              # all four scenes
+node util/capture-screenshots.js garden bonsai   # just these
+node util/capture-screenshots.js --headless      # no display available
+```
+
+The script boots its own demo server on port 8099, loads each scene page, waits for the viewer
+to hide its loading UI, lets the scene-reveal fade settle, and writes a JPEG into
+`public/images/screenshots/`. It needs `npm run build` to have been run and the demo scene data
+to be in place.
+
+It runs headed by default. Splat rendering leans on the GPU, and headless Chrome falls back to
+SwiftShader software rendering, which on these scenes is slow enough to time out or capture a
+half-drawn frame. Use `--headless` only when there is no display.
+
+Capture size and JPEG quality are constants at the top of `util/capture-screenshots.js`.
+
 ## Linting and formatting
 
 ```shell

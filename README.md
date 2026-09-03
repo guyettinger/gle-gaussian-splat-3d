@@ -14,6 +14,20 @@ the technique that turns a set of 2D photos into a photorealistic 3D scene you c
 This is a typed fork of [mkkellogg/GaussianSplats3D](https://github.com/mkkellogg/GaussianSplats3D),
 published to npm with bundled TypeScript declarations.
 
+<table>
+  <tr>
+    <td width="50%"><img alt="Garden scene" src="public/images/screenshots/garden.jpg"/></td>
+    <td width="50%"><img alt="Bonsai scene" src="public/images/screenshots/bonsai.jpg"/></td>
+  </tr>
+  <tr>
+    <td width="50%"><img alt="Truck scene" src="public/images/screenshots/truck.jpg"/></td>
+    <td width="50%"><img alt="Stump scene" src="public/images/screenshots/stump.jpg"/></td>
+  </tr>
+</table>
+
+<sub>The bundled demo scenes, captured from the live viewer in Chrome. Regenerate these with
+<code>npm run screenshots</code> — see <a href="docs/development.md#screenshots">Development</a>.</sub>
+
 ## Install
 
 ```shell
@@ -86,8 +100,9 @@ npm run build
 npm run demo
 ```
 
-Then open <http://127.0.0.1:8080/index.html>. You'll need the scene data, which lives outside
-the repository — see [Development](docs/development.md#run-the-demo).
+Then open <http://127.0.0.1:8080/index.html>. Those are the four scenes pictured above. You'll
+need the scene data, which lives outside the repository — see
+[Development](docs/development.md#run-the-demo).
 
 ## Credits
 
