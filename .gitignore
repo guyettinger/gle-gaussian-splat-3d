@@ -3,3 +3,6 @@ build
 node_modules
 **/*.DS_Store
 /demo/assets/data/
+
+# IDE
+.idea/
